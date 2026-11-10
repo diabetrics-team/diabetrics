@@ -1,0 +1,409 @@
+{
+  "normal": {
+    "description": "Спокойный день в диапазоне 5–8 ммоль/л",
+    "start": "09:00",
+    "duration_min": 360,
+    "expected": [
+      "ни одного критического и важного"
+    ],
+    "facts": {
+      "points": 73,
+      "raw_entries": 73,
+      "min": 5.7,
+      "max": 7.5,
+      "first_below_3_9": null,
+      "first_below_3_0": null,
+      "first_above_10_0": null,
+      "first_above_13_9": null,
+      "above_10_0_for_1h_at": null,
+      "above_13_9_for_1h_at": null,
+      "max_drop_rate": -0.04,
+      "max_rise_rate": 0.04,
+      "first_fast_drop": null,
+      "first_fast_rise": null,
+      "artifacts": [],
+      "gaps": []
+    }
+  },
+  "night_hypo": {
+    "description": "Ночная гипогликемия: плавное падение до 2.7",
+    "start": "23:00",
+    "duration_min": 480,
+    "expected": [
+      "важное low при first_below_3_9 (в Ночном режиме — сразу критическое)",
+      "критическое very_low не позже first_below_3_0; предиктивное — раньше",
+      "нет «Я в порядке» -> повтор -> доверенному лицу"
+    ],
+    "facts": {
+      "points": 97,
+      "raw_entries": 97,
+      "min": 2.6,
+      "max": 7.0,
+      "first_below_3_9": "01:50",
+      "first_below_3_0": "03:00",
+      "first_above_10_0": null,
+      "first_above_13_9": null,
+      "above_10_0_for_1h_at": null,
+      "above_13_9_for_1h_at": null,
+      "max_drop_rate": -0.06,
+      "max_rise_rate": 0.08,
+      "first_fast_drop": null,
+      "first_fast_rise": null,
+      "artifacts": [],
+      "gaps": []
+    }
+  },
+  "meal": {
+    "description": "Завтрак ~60 г углеводов: 6 -> 12.8 за час -> возврат к 3 ч",
+    "start": "08:00",
+    "duration_min": 240,
+    "expected": [
+      "Обычный режим: важное fast_rise, затем важное high > 1 ч",
+      "«После еды»: ни одного уведомления (порог 13.9 не пересечён)"
+    ],
+    "facts": {
+      "points": 49,
+      "raw_entries": 49,
+      "min": 6.0,
+      "max": 12.9,
+      "first_below_3_9": null,
+      "first_below_3_0": null,
+      "first_above_10_0": "08:40",
+      "first_above_13_9": null,
+      "above_10_0_for_1h_at": "09:40",
+      "above_13_9_for_1h_at": null,
+      "max_drop_rate": -0.11,
+      "max_rise_rate": 0.21,
+      "first_fast_drop": null,
+      "first_fast_rise": "08:30",
+      "artifacts": [],
+      "gaps": []
+    }
+  },
+  "fast_drop": {
+    "description": "Быстрое падение 9.5 -> 4.0 за 30 мин, дно 3.6",
+    "start": "16:00",
+    "duration_min": 120,
+    "expected": [
+      "важное fast_drop",
+      "предиктивное: важное при текущем >= 5.0, критическое при < 5.0",
+      "важное low; very_low нет (до 3.0 не доходит)"
+    ],
+    "facts": {
+      "points": 25,
+      "raw_entries": 25,
+      "min": 3.7,
+      "max": 9.5,
+      "first_below_3_9": "16:55",
+      "first_below_3_0": null,
+      "first_above_10_0": null,
+      "first_above_13_9": null,
+      "above_10_0_for_1h_at": null,
+      "above_13_9_for_1h_at": null,
+      "max_drop_rate": -0.24,
+      "max_rise_rate": 0.05,
+      "first_fast_drop": "16:45",
+      "first_fast_rise": null,
+      "artifacts": [],
+      "gaps": []
+    }
+  },
+  "hypo_corrected": {
+    "description": "Гипо 3.3 -> быстрые углеводы -> 5.5 за 20 мин",
+    "start": "12:00",
+    "duration_min": 120,
+    "expected": [
+      "важное low один раз",
+      "в «После коррекции гипо»: повторов нет, перепроверка через 15 мин -> тишина"
+    ],
+    "facts": {
+      "points": 25,
+      "raw_entries": 25,
+      "min": 3.3,
+      "max": 6.3,
+      "first_below_3_9": "12:35",
+      "first_below_3_0": null,
+      "first_above_10_0": null,
+      "first_above_13_9": null,
+      "above_10_0_for_1h_at": null,
+      "above_13_9_for_1h_at": null,
+      "max_drop_rate": -0.08,
+      "max_rise_rate": 0.13,
+      "first_fast_drop": null,
+      "first_fast_rise": null,
+      "artifacts": [],
+      "gaps": []
+    }
+  },
+  "hypo_not_corrected": {
+    "description": "Гипо, коррекция не помогла: держится 3.4–3.6",
+    "start": "12:00",
+    "duration_min": 120,
+    "expected": [
+      "важное low",
+      "в «После коррекции гипо»: через 15 мин всё ещё < 3.9 -> критическое"
+    ],
+    "facts": {
+      "points": 25,
+      "raw_entries": 25,
+      "min": 3.4,
+      "max": 5.8,
+      "first_below_3_9": "12:35",
+      "first_below_3_0": null,
+      "first_above_10_0": null,
+      "first_above_13_9": null,
+      "above_10_0_for_1h_at": null,
+      "above_13_9_for_1h_at": null,
+      "max_drop_rate": -0.08,
+      "max_rise_rate": 0.06,
+      "first_fast_drop": null,
+      "first_fast_rise": null,
+      "artifacts": [],
+      "gaps": []
+    }
+  },
+  "hyper_long": {
+    "description": "Долгая гипергликемия: > 13.9 около 1.5 ч, рост медленный",
+    "start": "14:00",
+    "duration_min": 250,
+    "expected": [
+      "важное high > 1 ч",
+      "критическое very_high > 1 ч",
+      "fast_rise НЕТ (рост медленнее порога)"
+    ],
+    "facts": {
+      "points": 51,
+      "raw_entries": 51,
+      "min": 8.0,
+      "max": 15.4,
+      "first_below_3_9": null,
+      "first_below_3_0": null,
+      "first_above_10_0": "14:30",
+      "first_above_13_9": "15:20",
+      "above_10_0_for_1h_at": "15:30",
+      "above_13_9_for_1h_at": "16:20",
+      "max_drop_rate": -0.11,
+      "max_rise_rate": 0.1,
+      "first_fast_drop": null,
+      "first_fast_rise": null,
+      "artifacts": [],
+      "gaps": []
+    }
+  },
+  "sensor_gap": {
+    "description": "Сигнал пропал на 45 мин при последнем значении ниже 3.9",
+    "start": "18:00",
+    "duration_min": 150,
+    "expected": [
+      "важное no_data через 20 мин",
+      "критическое no_data через 30 мин (последнее значение низкое)",
+      "после возврата данных: тренд неизвестен, прогноза нет"
+    ],
+    "facts": {
+      "points": 23,
+      "raw_entries": 23,
+      "min": 3.7,
+      "max": 6.5,
+      "first_below_3_9": "18:45",
+      "first_below_3_0": null,
+      "first_above_10_0": null,
+      "first_above_13_9": null,
+      "above_10_0_for_1h_at": null,
+      "above_13_9_for_1h_at": null,
+      "max_drop_rate": -0.09,
+      "max_rise_rate": 0.06,
+      "first_fast_drop": null,
+      "first_fast_rise": null,
+      "artifacts": [],
+      "gaps": [
+        {
+          "last_reading_at": "18:50",
+          "last_mmol": 3.7,
+          "no_data_20min_at": "19:10",
+          "no_data_30min_at": "19:20",
+          "data_back_at": "19:35",
+          "minutes": 45
+        }
+      ]
+    }
+  },
+  "noise_spike": {
+    "description": "Ровные 6.5 и два одиночных выброса датчика (2.8 и 15.5)",
+    "start": "10:00",
+    "duration_min": 210,
+    "expected": [
+      "НИ ОДНОГО критического, эскалации нет",
+      "выброс = скачок > 0.5 ммоль/л/мин: ждать следующего показания"
+    ],
+    "facts": {
+      "points": 43,
+      "raw_entries": 43,
+      "min": 6.4,
+      "max": 6.8,
+      "first_below_3_9": null,
+      "first_below_3_0": null,
+      "first_above_10_0": null,
+      "first_above_13_9": null,
+      "above_10_0_for_1h_at": null,
+      "above_13_9_for_1h_at": null,
+      "max_drop_rate": -0.01,
+      "max_rise_rate": 0.02,
+      "first_fast_drop": null,
+      "first_fast_rise": null,
+      "artifacts": [
+        {
+          "at": "11:00",
+          "mmol": 2.8
+        },
+        {
+          "at": "12:30",
+          "mmol": 15.5
+        }
+      ],
+      "gaps": []
+    }
+  },
+  "borderline": {
+    "description": "Сахар 40 мин колеблется вокруг порога 3.9 (3.7–4.1)",
+    "start": "15:00",
+    "duration_min": 120,
+    "expected": [
+      "важное low РОВНО один раз + повторы по антиспаму, а не на каждое пересечение",
+      "гистерезис: «вернулся в норму» только выше 4.2"
+    ],
+    "facts": {
+      "points": 25,
+      "raw_entries": 25,
+      "min": 3.7,
+      "max": 5.5,
+      "first_below_3_9": "15:35",
+      "first_below_3_0": null,
+      "first_above_10_0": null,
+      "first_above_13_9": null,
+      "above_10_0_for_1h_at": null,
+      "above_13_9_for_1h_at": null,
+      "max_drop_rate": -0.07,
+      "max_rise_rate": 0.05,
+      "first_fast_drop": null,
+      "first_fast_rise": null,
+      "artifacts": [],
+      "gaps": []
+    }
+  },
+  "meal_overbolus": {
+    "description": "Еда -> пик 11.5 -> лишний инсулин -> плавное падение до 3.4",
+    "start": "13:00",
+    "duration_min": 250,
+    "expected": [
+      "«После еды» НЕ глушит низкие: важное low приходит",
+      "Обычный режим: fast_rise и high > 1 ч; в «После еды» оба подавлены; fast_drop нет"
+    ],
+    "facts": {
+      "points": 51,
+      "raw_entries": 51,
+      "min": 3.2,
+      "max": 11.6,
+      "first_below_3_9": "15:40",
+      "first_below_3_0": null,
+      "first_above_10_0": "13:40",
+      "first_above_13_9": null,
+      "above_10_0_for_1h_at": "14:40",
+      "above_13_9_for_1h_at": null,
+      "max_drop_rate": -0.14,
+      "max_rise_rate": 0.23,
+      "first_fast_drop": null,
+      "first_fast_rise": "13:40",
+      "artifacts": [],
+      "gaps": []
+    }
+  },
+  "sensor_lost": {
+    "description": "Датчик отвалился при нормальном сахаре и не вернулся",
+    "start": "20:00",
+    "duration_min": 180,
+    "expected": [
+      "важное no_data через 20 мин, дальше повторы по антиспаму",
+      "критического НЕТ (последнее значение в норме)"
+    ],
+    "facts": {
+      "points": 13,
+      "raw_entries": 13,
+      "min": 6.8,
+      "max": 7.1,
+      "first_below_3_9": null,
+      "first_below_3_0": null,
+      "first_above_10_0": null,
+      "first_above_13_9": null,
+      "above_10_0_for_1h_at": null,
+      "above_13_9_for_1h_at": null,
+      "max_drop_rate": -0.02,
+      "max_rise_rate": 0.01,
+      "first_fast_drop": null,
+      "first_fast_rise": null,
+      "artifacts": [],
+      "gaps": [
+        {
+          "last_reading_at": "21:00",
+          "last_mmol": 6.9,
+          "no_data_20min_at": "21:20",
+          "no_data_30min_at": "21:30",
+          "data_back_at": null,
+          "minutes": 120
+        }
+      ]
+    }
+  },
+  "dirty_data": {
+    "description": "Нормальный сахар, но сырой ответ как в жизни: дубликаты, mbg, код ошибки",
+    "start": "11:00",
+    "duration_min": 180,
+    "expected": [
+      "после очистки ровно facts.points показаний, ни одного уведомления",
+      "клиент: только type=sgv, sgv >= 40, дедупликация по времени"
+    ],
+    "facts": {
+      "points": 36,
+      "raw_entries": 43,
+      "min": 6.0,
+      "max": 7.3,
+      "first_below_3_9": null,
+      "first_below_3_0": null,
+      "first_above_10_0": null,
+      "first_above_13_9": null,
+      "above_10_0_for_1h_at": null,
+      "above_13_9_for_1h_at": null,
+      "max_drop_rate": -0.04,
+      "max_rise_rate": 0.03,
+      "first_fast_drop": null,
+      "first_fast_rise": null,
+      "artifacts": [],
+      "gaps": []
+    }
+  },
+  "random_day": {
+    "description": "Случайный день: 3 приёма пищи, феномен утренней зари (зависит от seed)",
+    "start": "00:00",
+    "duration_min": 1440,
+    "expected": [
+      "для графиков, метрик TIR и оценки прогноза"
+    ],
+    "facts": {
+      "points": 289,
+      "raw_entries": 289,
+      "min": 5.8,
+      "max": 12.3,
+      "first_below_3_9": null,
+      "first_below_3_0": null,
+      "first_above_10_0": "08:40",
+      "first_above_13_9": null,
+      "above_10_0_for_1h_at": "14:35",
+      "above_13_9_for_1h_at": null,
+      "max_drop_rate": -0.07,
+      "max_rise_rate": 0.24,
+      "first_fast_drop": null,
+      "first_fast_rise": "13:30",
+      "artifacts": [],
+      "gaps": []
+    }
+  }
+}
