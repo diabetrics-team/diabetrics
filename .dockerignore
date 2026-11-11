@@ -1,0 +1,7 @@
+.git
+.env
+data
+tests
+fake_cgm
+__pycache__
+.venv

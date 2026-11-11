@@ -1,0 +1,7 @@
+services:
+  bot:
+    build: .
+    env_file: .env
+    volumes:
+      - ./data:/app/data        # SQLite живёт здесь и переживает пересборку
+    restart: unless-stopped
