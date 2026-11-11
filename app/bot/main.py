@@ -14,17 +14,23 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import BotCommand
 
-from app.bot import texts
+from app.bot import notify, texts
 from app.bot.config import load_config
-from app.bot.handlers import get_routers
 
 
 def create_bot(token: str) -> Bot:
-    # Отдельная функция, чтобы pipeline (Dev 1) мог создать такой же Bot для notify().
     return Bot(token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
 
 def create_dispatcher() -> Dispatcher:
+    # Вызывать один раз на процесс: роутеры — объекты модулей и подключаются
+    # только к одному Dispatcher (второй вызов упадёт с RuntimeError).
+    #
+    # Хендлеры импортируются здесь, а не в начале файла: к этому моменту load_config()
+    # уже загрузил .env, а app/clock.py (его импортирует handlers/now.py) читает CLOCK
+    # из окружения в момент импорта. Иначе CLOCK=nightscout из .env не сработал бы.
+    from app.bot.handlers import get_routers
+
     dp = Dispatcher()
     dp.include_routers(*get_routers())
     return dp
@@ -35,8 +41,9 @@ async def main() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    config = load_config()
+    config = load_config()          # загружает .env — до create_dispatcher()
     bot = create_bot(config.bot_token)
+    notify.setup(bot)   # теперь notify() отправляет в Telegram, а не в консоль
     dp = create_dispatcher()
 
     # Меню команд (кнопка «Меню» слева от поля ввода в Telegram).
