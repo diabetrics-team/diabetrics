@@ -9,9 +9,12 @@ from html import escape
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
-from app.bot import texts
+from app.bot import storage, texts
+from app.bot.handlers.onboarding import ask_url
+from app.bot.keyboards import reconnect_keyboard
 
 router = Router(name="start")
 
@@ -25,11 +28,20 @@ async def start_invite(message: Message) -> None:
 
 
 @router.message(CommandStart())
-async def start(message: Message) -> None:
-    # TODO (День 2): после приветствия — онбординг (адрес Nightscout, токен, часовой пояс).
-    name = message.from_user.first_name if message.from_user else "друг"
+async def start(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
     # escape: включён HTML-режим, а в имени могут быть символы < > &
-    await message.answer(texts.START.format(name=escape(name)))
+    await message.answer(texts.START.format(name=escape(message.from_user.first_name)))
+    user = storage.get_user(message.from_user.id)
+    if user is None:
+        await ask_url(message, state)
+    else:
+        await state.clear()
+        await message.answer(
+            texts.ONBOARDING_ALREADY.format(url=escape(user.ns_url)),
+            reply_markup=reconnect_keyboard(),
+        )
 
 
 @router.message(Command("help"))
