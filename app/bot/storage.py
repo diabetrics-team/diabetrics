@@ -1,15 +1,19 @@
 """
-ВРЕМЕННОЕ хранилище бота в памяти: подключение к Nightscout, часовой пояс, режим.
+Хранилище бота: подключение к Nightscout, часовой пояс, режим.
 
-Владелец: Dev 3. Всё стирается при перезапуске бота.
-Когда Dev 1 выложит БД (app/db.py), заменить импорт `from app.bot import storage`
-на функции БД. Имена get_mode / set_mode — как в TODO v2 у Dev 1 (день 3);
-get_user / save_user — согласовать с Dev 1.
+Владелец: Dev 3 (API), Dev 1 (реализация на БД).
+Было в памяти — теперь в SQLite через app/db.py, поэтому pipeline видит тех же
+пользователей и режимы, а после перезапуска бота ничего не теряется.
+API не менялся: BotUser, get_user, save_user, get_mode, set_mode, reset.
+
+Если БД ещё не подключена (тесты бота, запуск без main.py), подключается
+временная БД в памяти — поведение как у прежнего хранилища.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app import clock, db
 from app.models import ModeState
 
 
@@ -21,27 +25,40 @@ class BotUser:
     tz: str | None = None       # IANA-имя, например "Europe/Moscow"
 
 
-_users: dict[int, BotUser] = {}
-_modes: dict[int, ModeState] = {}
+def _ensure_db() -> None:
+    if not db.is_configured():
+        db.configure("sqlite:///:memory:")
 
 
 def get_user(telegram_id: int) -> BotUser | None:
-    return _users.get(telegram_id)
+    _ensure_db()
+    u = db.get_user_by_chat(telegram_id)
+    if u is None or u.ns_url is None:
+        return None
+    return BotUser(telegram_id=u.chat_id, ns_url=u.ns_url, ns_token=u.ns_token, tz=u.tz)
 
 
 def save_user(user: BotUser) -> None:
-    _users[user.telegram_id] = user
+    _ensure_db()
+    db.upsert_user(
+        user.telegram_id, clock.now(),
+        ns_url=user.ns_url, ns_token=user.ns_token, tz=user.tz, is_active=True,
+    )
 
 
 def get_mode(telegram_id: int) -> ModeState:
-    return _modes.get(telegram_id, ModeState())
+    _ensure_db()
+    u = db.get_user_by_chat(telegram_id)
+    return db.get_mode(u.id) if u is not None else ModeState()
 
 
 def set_mode(telegram_id: int, state: ModeState) -> None:
-    _modes[telegram_id] = state
+    _ensure_db()
+    now = clock.now()
+    u = db.get_user_by_chat(telegram_id) or db.upsert_user(telegram_id, now)
+    db.set_mode(u.id, state, now)
 
 
 def reset() -> None:
-    """Для тестов: очистить всё."""
-    _users.clear()
-    _modes.clear()
+    """Для тестов: очистить всё (новая пустая БД в памяти)."""
+    db.configure("sqlite:///:memory:")

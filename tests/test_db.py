@@ -67,3 +67,93 @@ def test_naive_datetime_rejected(session):
     session.add(User(chat_id=2, created_at=datetime(2026, 11, 11, 3, 0)))
     with pytest.raises(StatementError, match="tzinfo"):
         session.flush()
+
+
+# ---------------------------------------------------------------- функции доступа (день 3) ---
+
+from app import db  # noqa: E402
+from app.models import Alert, AlertKind, Level, Mode, ModeState, Reading  # noqa: E402
+
+
+@pytest.fixture
+def mem():
+    db.configure("sqlite:///:memory:")
+    yield db
+
+
+def _user(chat=111):
+    return db.upsert_user(chat, NOW, ns_url="http://ns", ns_token="t", tz="Europe/Moscow")
+
+
+def test_upsert_user_and_active(mem):
+    u = _user()
+    assert db.get_user_by_chat(111).id == u.id
+    db.upsert_user(111, NOW, tz="Asia/Tomsk")
+    assert db.get_user(u.id).tz == "Asia/Tomsk" and db.get_user(u.id).ns_url == "http://ns"
+    db.upsert_user(222, NOW)                        # без Nightscout — pipeline его не опрашивает
+    assert [x.chat_id for x in db.active_users()] == [111]
+    db.set_active(u.id, False)
+    assert db.active_users() == []
+    with pytest.raises(ValueError):
+        db.upsert_user(111, NOW, no_such_column=1)
+
+
+def test_readings_saved_once_and_ordered(mem):
+    u = _user()
+    rs = [Reading(NOW + timedelta(minutes=5 * i), 5.0 + i, "Flat") for i in range(3)]
+    assert len(db.save_readings(u.id, rs[::-1])) == 3
+    assert db.save_readings(u.id, rs) == []        # повторно — ничего нового
+    assert db.last_reading_ts(u.id) == rs[-1].ts
+    assert db.readings_since(u.id, NOW + timedelta(minutes=5)) == rs[1:]
+
+
+def test_mode_roundtrip(mem):
+    u = _user()
+    assert db.get_mode(u.id) == ModeState()
+    st = ModeState(Mode.AFTER_MEAL, until=NOW + timedelta(hours=2))
+    db.set_mode(u.id, st, NOW)
+    assert db.get_mode(u.id) == st
+    db.set_mode(u.id, ModeState(Mode.NIGHT), NOW)
+    assert db.get_mode(u.id) == ModeState(Mode.NIGHT)
+
+
+def test_alerts_ack_sent_escalated(mem):
+    u = _user()
+    a = db.save_alert(Alert(Level.CRITICAL, AlertKind.VERY_LOW, NOW, 2.8, True, user_id=u.id),
+                      sent_at=NOW)
+    assert a.id is not None
+    assert [x.id for x in db.open_alerts(u.id)] == [a.id]
+    assert db.recent_alerts(u.id, NOW - timedelta(hours=1))[0].kind is AlertKind.VERY_LOW
+    assert db.last_sent_at(a.id) == NOW
+    db.mark_sent(a.id, NOW + timedelta(minutes=5), message_id=42)
+    assert db.last_sent_at(a.id) == NOW + timedelta(minutes=5)
+    assert db.mark_escalated(a.id, NOW + timedelta(minutes=10)) is True
+    assert db.mark_escalated(a.id, NOW + timedelta(minutes=11)) is False
+    assert db.mark_ack(a.id, 111, NOW + timedelta(minutes=12)) is True
+    assert db.mark_ack(a.id, 999, NOW + timedelta(minutes=13)) is False   # второе нажатие
+    got = db.get_alert(a.id)
+    assert got.acked_by == 111 and got.escalated_at == NOW + timedelta(minutes=10)
+    assert db.open_alerts(u.id) == []
+    with pytest.raises(ValueError):
+        db.save_alert(Alert(Level.INFO, AlertKind.DIGEST, NOW))           # без user_id
+
+
+def test_open_alerts_survive_restart(tmp_path):
+    url = f"sqlite:///{tmp_path / 'd.db'}"
+    db.configure(url)
+    u = _user()
+    a = db.save_alert(Alert(Level.CRITICAL, AlertKind.VERY_LOW, NOW, 2.8, True, user_id=u.id))
+    db.configure(url)                               # «перезапуск»: новое подключение к тому же файлу
+    [again] = db.open_alerts()
+    assert again.id == a.id and again.needs_ack and again.created_at == NOW
+
+
+def test_trusted_invite(mem):
+    u = _user()
+    db.create_invite(u.id, "abc", NOW)
+    assert db.trusted_chat_ids(u.id) == []          # пока не принято
+    owner = db.accept_invite("abc", 555, "Мама", NOW)
+    assert owner.id == u.id
+    assert db.accept_invite("abc", 666, "Чужой", NOW) is None   # код одноразовый
+    assert db.trusted_chat_ids(u.id) == [555]
+    assert db.remove_trusted(u.id) == 1 and db.trusted_chat_ids(u.id) == []
