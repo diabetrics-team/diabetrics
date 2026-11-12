@@ -5,3 +5,19 @@ services:
     volumes:
       - ./data:/app/data        # SQLite живёт здесь и переживает пересборку
     restart: unless-stopped
+
+  # Фейковый Nightscout для демо и обкатки. Запускается только с профилем demo:
+  #   docker compose --profile demo up -d
+  # В боте адрес: http://fake-ns:1337, токен: значение FAKE_NS_TOKEN.
+  fake-ns:
+    image: python:3.11-slim
+    profiles: ["demo"]
+    volumes:
+      - ./fake_cgm:/fake:ro
+    command: >
+      python /fake/fake_cgm.py --serve
+      --scenario ${SCENARIO:-night_hypo} --speed ${SPEED:-30}
+      --skip ${SKIP:-150} --token ${FAKE_NS_TOKEN:-secret}
+    ports:
+      - "127.0.0.1:1337:1337"   # только с этой машины: для scripts/check_ns.py
+    restart: unless-stopped

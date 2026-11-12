@@ -4,5 +4,5 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
-# Пока бот и pipeline запускаются раздельно; в четверг здесь будет общий app.main
-CMD ["python", "-m", "app.bot.main"]
+# Один процесс: бот (polling) + pipeline (APScheduler)
+CMD ["python", "-m", "app.main"]
