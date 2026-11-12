@@ -6,13 +6,20 @@
 имеют тип UTCDateTime: на запись принимают только aware-datetime, на чтение
 отдают aware UTC. Часовой пояс пользователя — в users.tz (нужен для ночного режима).
 
-Функции доступа (get_mode, set_mode, save_alert, open_alerts, mark_ack,
-recent_alerts) — день 3, в этом же файле.
+Использование:
+    from app import db
+    db.configure("sqlite:///data/diabetrics.db")   # один раз при старте (main.py)
+    db.get_mode(user_id)
+
+Функции доступа синхронные: SQLite локальный, запросы занимают миллисекунды,
+отдельный поток ради них не нужен. user_id в функциях — внутренний users.id;
+по telegram id пользователя находит get_user_by_chat().
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from collections.abc import Iterable
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import (
@@ -26,15 +33,18 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     create_engine,
+    delete,
     event,
+    select,
+    update,
 )
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.types import TypeDecorator
 
-from app.models import Mode
+from app.models import Alert, AlertKind, Level, Mode, ModeState, Reading
 
-UTC = UTC
+UTC = timezone.utc
 
 
 class UTCDateTime(TypeDecorator):
@@ -62,11 +72,11 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    chat_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)  # = telegram id
     name: Mapped[str | None] = mapped_column(String(100))
     ns_url: Mapped[str | None] = mapped_column(String(300))
     ns_token: Mapped[str | None] = mapped_column(String(200))  # только на чтение; в логи не пишем
-    tz: Mapped[str] = mapped_column(String(64), default="Europe/Moscow")
+    tz: Mapped[str | None] = mapped_column(String(64))         # None — ещё не выбран в онбординге
     escalation_minutes: Mapped[int] = mapped_column(Integer, default=10)
     night_start: Mapped[str] = mapped_column(String(5), default="23:00")  # локальное время, HH:MM
     night_end: Mapped[str] = mapped_column(String(5), default="07:00")
@@ -132,6 +142,8 @@ class TrustedContact(Base):
     confirmed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
 
+# ------------------------------------------------------------------ подключение ---
+
 def make_engine(url: str = "sqlite:///data/diabetrics.db", *, echo: bool = False) -> Engine:
     if url.startswith("sqlite:///") and not url.startswith("sqlite:///:memory:"):
         Path(url.removeprefix("sqlite:///")).parent.mkdir(parents=True, exist_ok=True)
@@ -156,3 +168,264 @@ def init_db(engine: Engine) -> None:
 
 def make_session_factory(engine: Engine) -> sessionmaker:
     return sessionmaker(engine, expire_on_commit=False)
+
+
+_engine: Engine | None = None
+_Session: sessionmaker | None = None
+
+
+def configure(url: str) -> None:
+    """Подключиться к БД и создать таблицы. Повторный вызов переподключает (тесты)."""
+    global _engine, _Session
+    if _engine is not None:
+        _engine.dispose()
+    _engine = make_engine(url)
+    init_db(_engine)
+    _Session = make_session_factory(_engine)
+
+
+def is_configured() -> bool:
+    return _Session is not None
+
+
+def _session() -> Session:
+    if _Session is None:
+        raise RuntimeError("БД не подключена: вызовите db.configure(url) при старте")
+    return _Session()
+
+
+# ------------------------------------------------------------------ пользователи ---
+
+def get_user(user_id: int) -> User | None:
+    with _session() as s:
+        return s.get(User, user_id)
+
+
+def get_user_by_chat(chat_id: int) -> User | None:
+    with _session() as s:
+        return s.scalar(select(User).where(User.chat_id == chat_id))
+
+
+def upsert_user(chat_id: int, now: datetime, **fields: object) -> User:
+    """Создать или обновить пользователя по telegram id. fields — колонки User."""
+    unknown = set(fields) - set(User.__table__.columns.keys())
+    if unknown:
+        raise ValueError(f"Нет таких колонок в users: {sorted(unknown)}")
+    with _session() as s, s.begin():
+        user = s.scalar(select(User).where(User.chat_id == chat_id))
+        if user is None:
+            user = User(chat_id=chat_id, created_at=now)
+            s.add(user)
+        for key, value in fields.items():
+            setattr(user, key, value)
+    return user
+
+
+def active_users() -> list[User]:
+    """Кого опрашивает pipeline: активные и с подключённым Nightscout."""
+    with _session() as s:
+        return list(s.scalars(
+            select(User).where(User.is_active.is_(True), User.ns_url.is_not(None))
+        ))
+
+
+def set_active(user_id: int, active: bool) -> None:
+    """False — пользователь заблокировал бота: перестаём опрашивать и слать."""
+    with _session() as s, s.begin():
+        s.execute(update(User).where(User.id == user_id).values(is_active=active))
+
+
+# ------------------------------------------------------------------ показания ---
+
+def last_reading_ts(user_id: int) -> datetime | None:
+    with _session() as s:
+        return s.scalar(
+            select(ReadingRow.ts).where(ReadingRow.user_id == user_id)
+            .order_by(ReadingRow.ts.desc()).limit(1)
+        )
+
+
+def save_readings(user_id: int, readings: Iterable[Reading]) -> list[Reading]:
+    """Сохранить новые показания. Возвращает только реально новые (уже сохранённые пропускает)."""
+    readings = list(readings)
+    if not readings:
+        return []
+    with _session() as s, s.begin():
+        existing = set(s.scalars(
+            select(ReadingRow.ts).where(
+                ReadingRow.user_id == user_id,
+                ReadingRow.ts.in_([r.ts for r in readings]),
+            )
+        ))
+        new = [r for r in readings if r.ts not in existing]
+        s.add_all(
+            ReadingRow(user_id=user_id, ts=r.ts, mmol=r.mmol, direction=r.direction) for r in new
+        )
+    return new
+
+
+def readings_since(user_id: int, since: datetime) -> list[Reading]:
+    """История для predict/evaluate: от старых к новым."""
+    with _session() as s:
+        rows = s.scalars(
+            select(ReadingRow).where(ReadingRow.user_id == user_id, ReadingRow.ts >= since)
+            .order_by(ReadingRow.ts)
+        )
+        return [Reading(ts=r.ts, mmol=r.mmol, direction=r.direction) for r in rows]
+
+
+# ------------------------------------------------------------------ режимы ---
+
+def get_mode(user_id: int) -> ModeState:
+    with _session() as s:
+        row = s.get(ModeRow, user_id)
+        if row is None:
+            return ModeState()
+        return ModeState(kind=Mode(row.kind), until=row.until)
+
+
+def set_mode(user_id: int, state: ModeState, now: datetime) -> None:
+    with _session() as s, s.begin():
+        row = s.get(ModeRow, user_id)
+        if row is None:
+            row = ModeRow(user_id=user_id)
+            s.add(row)
+        row.kind = Mode(state.kind).value
+        row.until = state.until
+        row.started_at = now
+
+
+# ------------------------------------------------------------------ уведомления ---
+
+def _to_alert(row: AlertRow) -> Alert:
+    return Alert(
+        level=Level(row.level),
+        kind=AlertKind(row.kind),
+        created_at=row.created_at,
+        value=row.value,
+        needs_ack=row.needs_ack,
+        id=row.id,
+        user_id=row.user_id,
+        acked_at=row.acked_at,
+        acked_by=row.acked_by,
+        escalated_at=row.escalated_at,
+    )
+
+
+def save_alert(alert: Alert, sent_at: datetime | None = None) -> Alert:
+    """Сохранить новое уведомление. Проставляет alert.id. alert.user_id обязателен."""
+    if alert.user_id is None:
+        raise ValueError("save_alert: у Alert не задан user_id")
+    with _session() as s, s.begin():
+        row = AlertRow(
+            user_id=alert.user_id,
+            level=Level(alert.level).value,
+            kind=AlertKind(alert.kind).value,
+            created_at=alert.created_at,
+            value=alert.value,
+            needs_ack=alert.needs_ack,
+            acked_at=alert.acked_at,
+            acked_by=alert.acked_by,
+            escalated_at=alert.escalated_at,
+            last_sent_at=sent_at,
+        )
+        s.add(row)
+        s.flush()
+        alert.id = row.id
+    return alert
+
+
+def get_alert(alert_id: int) -> Alert | None:
+    with _session() as s:
+        row = s.get(AlertRow, alert_id)
+        return _to_alert(row) if row is not None else None
+
+
+def open_alerts(user_id: int | None = None) -> list[Alert]:
+    """Критические без «Я в порядке». Читаются из БД — эскалация переживает перезапуск."""
+    with _session() as s:
+        q = select(AlertRow).where(AlertRow.needs_ack.is_(True), AlertRow.acked_at.is_(None))
+        if user_id is not None:
+            q = q.where(AlertRow.user_id == user_id)
+        return [_to_alert(r) for r in s.scalars(q.order_by(AlertRow.created_at))]
+
+
+def recent_alerts(user_id: int, since: datetime) -> list[Alert]:
+    """Уведомления пользователя с момента since (для антиспама в evaluate)."""
+    with _session() as s:
+        rows = s.scalars(
+            select(AlertRow).where(AlertRow.user_id == user_id, AlertRow.created_at >= since)
+            .order_by(AlertRow.created_at)
+        )
+        return [_to_alert(r) for r in rows]
+
+
+def mark_ack(alert_id: int, who: int, at: datetime) -> bool:
+    """«Я в порядке». who — telegram id нажавшего. False — уже было подтверждено раньше."""
+    with _session() as s, s.begin():
+        result = s.execute(
+            update(AlertRow)
+            .where(AlertRow.id == alert_id, AlertRow.acked_at.is_(None))
+            .values(acked_at=at, acked_by=who)
+        )
+        return result.rowcount == 1
+
+
+def mark_sent(alert_id: int, at: datetime, message_id: int | None = None) -> None:
+    """Уведомление (или его повтор) ушло пользователю."""
+    values: dict[str, object] = {"last_sent_at": at}
+    if message_id is not None:
+        values["message_id"] = message_id
+    with _session() as s, s.begin():
+        s.execute(update(AlertRow).where(AlertRow.id == alert_id).values(**values))
+
+
+def last_sent_at(alert_id: int) -> datetime | None:
+    with _session() as s:
+        return s.scalar(select(AlertRow.last_sent_at).where(AlertRow.id == alert_id))
+
+
+def mark_escalated(alert_id: int, at: datetime) -> bool:
+    """Ушло доверенному лицу. False — уже эскалировано раньше (повторно не шлём)."""
+    with _session() as s, s.begin():
+        result = s.execute(
+            update(AlertRow)
+            .where(AlertRow.id == alert_id, AlertRow.escalated_at.is_(None))
+            .values(escalated_at=at)
+        )
+        return result.rowcount == 1
+
+
+# ------------------------------------------------------------------ доверенные лица ---
+
+def create_invite(user_id: int, code: str, now: datetime) -> None:
+    with _session() as s, s.begin():
+        s.add(TrustedContact(user_id=user_id, invite_code=code, created_at=now))
+
+
+def accept_invite(code: str, chat_id: int, name: str | None, now: datetime) -> User | None:
+    """Доверенное лицо перешло по ссылке. Возвращает пользователя, который пригласил."""
+    with _session() as s, s.begin():
+        tc = s.scalar(select(TrustedContact).where(
+            TrustedContact.invite_code == code, TrustedContact.confirmed_at.is_(None)
+        ))
+        if tc is None:
+            return None
+        tc.chat_id, tc.name, tc.confirmed_at = chat_id, name, now
+        return s.get(User, tc.user_id)
+
+
+def trusted_chat_ids(user_id: int) -> list[int]:
+    with _session() as s:
+        return list(s.scalars(select(TrustedContact.chat_id).where(
+            TrustedContact.user_id == user_id, TrustedContact.confirmed_at.is_not(None)
+        )))
+
+
+def remove_trusted(user_id: int, chat_id: int | None = None) -> int:
+    """Отвязать доверенных лиц пользователя (всех или одного). Возвращает, сколько удалено."""
+    with _session() as s, s.begin():
+        q = delete(TrustedContact).where(TrustedContact.user_id == user_id)
+        if chat_id is not None:
+            q = q.where(TrustedContact.chat_id == chat_id)
+        return s.execute(q).rowcount
