@@ -1,8 +1,8 @@
 """
-Запуск Telegram-бота: python -m app.bot.main
+Запуск только Telegram-бота, без pipeline: python -m app.bot.main
+Удобно, когда правишь интерфейс. Обычный запуск — бот вместе с pipeline: python -m app.main (Dev 1).
 
-Владелец: Dev 3. Пока бот запускается отдельно от pipeline.
-Собрать их в один процесс (polling + планировщик) — вместе с Dev 1, когда появится pipeline v2.
+Владелец: Dev 3. create_bot и create_dispatcher использует app/main.py.
 """
 from __future__ import annotations
 
@@ -14,8 +14,10 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import BotCommand
 
+from app import db
 from app.bot import notify, texts
 from app.bot.config import load_config
+from app.bot.handlers import get_routers
 
 
 def create_bot(token: str) -> Bot:
@@ -25,12 +27,6 @@ def create_bot(token: str) -> Bot:
 def create_dispatcher() -> Dispatcher:
     # Вызывать один раз на процесс: роутеры — объекты модулей и подключаются
     # только к одному Dispatcher (второй вызов упадёт с RuntimeError).
-    #
-    # Хендлеры импортируются здесь, а не в начале файла: к этому моменту load_config()
-    # уже загрузил .env, а app/clock.py (его импортирует handlers/now.py) читает CLOCK
-    # из окружения в момент импорта. Иначе CLOCK=nightscout из .env не сработал бы.
-    from app.bot.handlers import get_routers
-
     dp = Dispatcher()
     dp.include_routers(*get_routers())
     return dp
@@ -41,7 +37,8 @@ async def main() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    config = load_config()          # загружает .env — до create_dispatcher()
+    config = load_config()
+    db.configure(config.database_url)                # как в app/main.py
     bot = create_bot(config.bot_token)
     notify.setup(bot)   # теперь notify() отправляет в Telegram, а не в консоль
     dp = create_dispatcher()

@@ -4,7 +4,8 @@
 Владелец: Dev 3 (API), Dev 1 (реализация на БД).
 Было в памяти — теперь в SQLite через app/db.py, поэтому pipeline видит тех же
 пользователей и режимы, а после перезапуска бота ничего не теряется.
-API не менялся: BotUser, get_user, save_user, get_mode, set_mode, reset.
+API: BotUser, get_user, save_user, get_mode, set_mode, reset.
+Доверенные лица и уведомления бот берёт прямо из app/db.py.
 
 Если БД ещё не подключена (тесты бота, запуск без main.py), подключается
 временная БД в памяти — поведение как у прежнего хранилища.
@@ -23,6 +24,7 @@ class BotUser:
     ns_url: str
     ns_token: str | None        # None — Nightscout открыт для чтения без токена
     tz: str | None = None       # IANA-имя, например "Europe/Moscow"
+    name: str | None = None     # имя из Telegram — его увидит доверенное лицо
 
 
 def _ensure_db() -> None:
@@ -35,14 +37,15 @@ def get_user(telegram_id: int) -> BotUser | None:
     u = db.get_user_by_chat(telegram_id)
     if u is None or u.ns_url is None:
         return None
-    return BotUser(telegram_id=u.chat_id, ns_url=u.ns_url, ns_token=u.ns_token, tz=u.tz)
+    return BotUser(telegram_id=u.chat_id, ns_url=u.ns_url, ns_token=u.ns_token, tz=u.tz, name=u.name)
 
 
 def save_user(user: BotUser) -> None:
     _ensure_db()
+    extra = {"name": user.name} if user.name is not None else {}   # None не затирает имя
     db.upsert_user(
         user.telegram_id, clock.now(),
-        ns_url=user.ns_url, ns_token=user.ns_token, tz=user.tz, is_active=True,
+        ns_url=user.ns_url, ns_token=user.ns_token, tz=user.tz, is_active=True, **extra,
     )
 
 

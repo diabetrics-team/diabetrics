@@ -429,3 +429,52 @@ def remove_trusted(user_id: int, chat_id: int | None = None) -> int:
         if chat_id is not None:
             q = q.where(TrustedContact.chat_id == chat_id)
         return s.execute(q).rowcount
+
+
+# ------------------------------------------- для бота (Dev 3): доверенные лица, кнопки ---
+
+def invite_owner(code: str) -> User | None:
+    """Кто пригласил по коду, если приглашение ещё не принято.
+
+    Боту нужно знать это ДО accept_invite: иначе, если человек открыл собственную ссылку,
+    приглашение уже израсходовано и настоящему доверенному лицу не достанется.
+    """
+    with _session() as s:
+        return s.scalar(
+            select(User).join(TrustedContact, TrustedContact.user_id == User.id)
+            .where(TrustedContact.invite_code == code, TrustedContact.confirmed_at.is_(None))
+        )
+
+
+def drop_pending_invites(user_id: int) -> None:
+    """Старые непринятые ссылки перестают работать: действует только последняя выданная."""
+    with _session() as s, s.begin():
+        s.execute(delete(TrustedContact).where(
+            TrustedContact.user_id == user_id, TrustedContact.confirmed_at.is_(None)
+        ))
+
+
+def trusted_contacts(user_id: int) -> list[TrustedContact]:
+    """Подтверждённые доверенные лица пользователя — с именами (trusted_chat_ids — без)."""
+    with _session() as s:
+        return list(s.scalars(
+            select(TrustedContact)
+            .where(TrustedContact.user_id == user_id, TrustedContact.confirmed_at.is_not(None))
+            .order_by(TrustedContact.confirmed_at)
+        ))
+
+
+def guarded_users(chat_id: int) -> list[User]:
+    """Для кого этот telegram id — подтверждённое доверенное лицо."""
+    with _session() as s:
+        return list(s.scalars(
+            select(User).join(TrustedContact, TrustedContact.user_id == User.id)
+            .where(TrustedContact.chat_id == chat_id, TrustedContact.confirmed_at.is_not(None))
+            .order_by(User.id)
+        ))
+
+
+def alert_message_id(alert_id: int) -> int | None:
+    """Сообщение с уведомлением (из mark_sent) — чтобы погасить у него кнопку «Я в порядке»."""
+    with _session() as s:
+        return s.scalar(select(AlertRow.message_id).where(AlertRow.id == alert_id))

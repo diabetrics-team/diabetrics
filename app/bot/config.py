@@ -10,10 +10,13 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
+DEFAULT_DATABASE_URL = "sqlite:///data/diabetrics.db"   # как в .env.example и app/db.py
+
 
 @dataclass(frozen=True, slots=True)
 class Config:
     bot_token: str
+    database_url: str
 
 
 def load_config() -> Config:
@@ -25,4 +28,4 @@ def load_config() -> Config:
         raise RuntimeError(
             "BOT_TOKEN не задан. Скопируйте .env.example в .env и впишите токен от @BotFather."
         )
-    return Config(bot_token=token)
+    return Config(bot_token=token, database_url=os.getenv("DATABASE_URL") or DEFAULT_DATABASE_URL)
