@@ -1,13 +1,9 @@
-"""Project rule settings: mmol/L, minutes, and mmol/L/minute.
-
-These defaults implement the supplied TODO; they are not medical guidance.
-Levels not specified by the supplied TODO are provisional pending team review.
-"""
+"""Project rule settings: mmol/L, minutes, and mmol/L/minute."""
 
 from datetime import timedelta
 from types import MappingProxyType
 
-from .contracts import AlertLevel
+from app.models import AlertKind, Level
 
 LOW = 3.9
 VERY_LOW = 3.0
@@ -20,10 +16,10 @@ NO_DATA_IMPORTANT = timedelta(minutes=20)
 NO_DATA_CRITICAL = timedelta(minutes=30)
 
 LEVELS = MappingProxyType({
-    "low": AlertLevel.IMPORTANT,
-    "very_low": AlertLevel.CRITICAL,
-    "fast_drop": AlertLevel.IMPORTANT,
-    "fast_rise": AlertLevel.STANDARD,
-    "high_1h": AlertLevel.IMPORTANT,
-    "very_high_1h": AlertLevel.CRITICAL,
+    AlertKind.LOW: Level.IMPORTANT,
+    AlertKind.VERY_LOW: Level.CRITICAL,
+    AlertKind.FAST_DROP: Level.IMPORTANT,
+    AlertKind.FAST_RISE: Level.IMPORTANT,
+    AlertKind.HIGH_1H: Level.IMPORTANT,
+    AlertKind.VERY_HIGH_1H: Level.CRITICAL,
 })
