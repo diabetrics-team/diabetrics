@@ -1,11 +1,13 @@
 """Pure evaluation: all time and data are supplied by the caller."""
 
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime, timezone
 from math import isfinite
 
+from app.models import Alert, AlertKind, Forecast, Level, ModeState, Reading
+
 from . import config
-from .contracts import Alert, AlertLevel, Forecast, Reading
 
 
 def _utc(value: datetime) -> datetime:
@@ -18,26 +20,25 @@ def _history(history: Sequence[Reading], now: datetime) -> list[Reading]:
     by_time: dict[datetime, Reading] = {}
     for reading in history:
         ts = _utc(reading.ts)
-        if not isfinite(reading.value) or reading.value <= 0:
-            raise ValueError("Reading.value must be finite and positive, in mmol/L")
+        if not isfinite(reading.mmol) or reading.mmol <= 0:
+            raise ValueError("Reading.mmol must be finite and positive, in mmol/L")
         if ts > now:
             continue
         previous = by_time.get(ts)
-        if previous is not None and previous.value != reading.value:
+        if previous is not None and previous.mmol != reading.mmol:
             raise ValueError("Conflicting readings at the same timestamp")
-        by_time[ts] = Reading(ts=ts, value=reading.value)
+        by_time[ts] = reading if reading.ts.tzinfo is timezone.utc else replace(reading, ts=ts)
     return sorted(by_time.values(), key=lambda reading: reading.ts)
 
 
 def _sustained(history: Sequence[Reading], threshold: float) -> bool:
     latest = history[-1]
-    if latest.value <= threshold:
+    if latest.mmol <= threshold:
         return False
     start = latest.ts
     newer = latest
     for reading in reversed(history[:-1]):
-        if (reading.value <= threshold
-                or newer.ts - reading.ts > config.MAX_READING_GAP):
+        if reading.mmol <= threshold or newer.ts - reading.ts > config.MAX_READING_GAP:
             break
         start = reading.ts
         newer = reading
@@ -47,7 +48,7 @@ def _sustained(history: Sequence[Reading], threshold: float) -> bool:
 def evaluate(
     history: Sequence[Reading],
     forecast: Forecast | None,
-    mode: object,
+    mode: ModeState,
     now: datetime,
     recent_alerts: Sequence[Alert],
 ) -> list[Alert]:
@@ -66,29 +67,35 @@ def evaluate(
     latest = readings[-1]
     age = now - latest.ts
 
-    def alert(kind: str, level: AlertLevel | None = None) -> Alert:
-        return Alert(kind=kind, level=level or config.LEVELS[kind],
-                     value=latest.value, ts=now)
+    def alert(kind: AlertKind, level: Level | None = None) -> Alert:
+        severity = config.LEVELS[kind] if level is None else level
+        return Alert(
+            kind=kind,
+            level=severity,
+            value=latest.mmol,
+            created_at=now,
+            needs_ack=severity is Level.CRITICAL,
+        )
 
     if age >= config.NO_DATA_IMPORTANT:
-        critical = age >= config.NO_DATA_CRITICAL and latest.value < config.LOW
-        level = AlertLevel.CRITICAL if critical else AlertLevel.IMPORTANT
-        return [alert("no_data", level)]
+        critical = age >= config.NO_DATA_CRITICAL and latest.mmol < config.LOW
+        level = Level.CRITICAL if critical else Level.IMPORTANT
+        return [alert(AlertKind.NO_DATA, level)]
 
     result = []
-    if latest.value < config.VERY_LOW:
-        result.append(alert("very_low"))
-    elif latest.value < config.LOW:
-        result.append(alert("low"))
+    if latest.mmol < config.VERY_LOW:
+        result.append(alert(AlertKind.VERY_LOW))
+    elif latest.mmol < config.LOW:
+        result.append(alert(AlertKind.LOW))
 
     if _sustained(readings, config.VERY_HIGH):
-        result.append(alert("very_high_1h"))
+        result.append(alert(AlertKind.VERY_HIGH_1H))
     elif _sustained(readings, config.HIGH):
-        result.append(alert("high_1h"))
+        result.append(alert(AlertKind.HIGH_1H))
 
     if forecast is not None and isfinite(forecast.rate):
         if forecast.rate < -config.FAST_RATE:
-            result.append(alert("fast_drop"))
+            result.append(alert(AlertKind.FAST_DROP))
         elif forecast.rate > config.FAST_RATE:
-            result.append(alert("fast_rise"))
+            result.append(alert(AlertKind.FAST_RISE))
     return result

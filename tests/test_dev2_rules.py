@@ -1,14 +1,15 @@
-"""Synthetic rule tests, runnable with unittest and pytest.
+"""Rule boundaries and replay of the official CGM scenarios."""
 
-These do not replace tests against the team's official scenarios.json facts.
-"""
-
+import json
+import unittest
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
-import unittest
+from pathlib import Path
 
 from app.alerts import evaluate
-from app.alerts.contracts import Alert, AlertLevel, Forecast, Reading
+from app.forecast import predict
+from app.models import Alert, AlertKind, Forecast, Level, ModeState, Reading
+from app.ns.clean import clean
 
 
 NOW = datetime(2026, 11, 11, 12, tzinfo=timezone.utc)
@@ -20,7 +21,11 @@ def series(values, step=5):
 
 
 def check(history, forecast=None, now=NOW):
-    return evaluate(history, forecast, "normal", now, [])
+    return evaluate(history, forecast, ModeState(), now, [])
+
+
+def make_forecast(rate):
+    return Forecast(mmol_20=6.0, mmol_30=6.0, rate=rate)
 
 
 def kinds(alerts):
@@ -35,10 +40,14 @@ class ValueTests(unittest.TestCase):
                 self.assertEqual(kinds(check(series([value]))), expected)
 
     def test_low_level(self):
-        self.assertEqual(check(series([3.4]))[0].level, AlertLevel.IMPORTANT)
+        self.assertEqual(check(series([3.4]))[0].level, Level.IMPORTANT)
 
     def test_very_low_level(self):
-        self.assertEqual(check(series([2.9]))[0].level, AlertLevel.CRITICAL)
+        alert = check(series([2.9]))[0]
+        self.assertIsInstance(alert, Alert)
+        self.assertIs(alert.kind, AlertKind.VERY_LOW)
+        self.assertIs(alert.level, Level.CRITICAL)
+        self.assertTrue(alert.needs_ack)
 
 
 class RateTests(unittest.TestCase):
@@ -46,21 +55,25 @@ class RateTests(unittest.TestCase):
         for rate, expected in [(-0.18, ["fast_drop"]), (-0.17, []), (0, []),
                                (0.17, []), (0.18, ["fast_rise"])]:
             with self.subTest(rate=rate):
-                self.assertEqual(kinds(check(series([6]), Forecast(rate))), expected)
+                alerts = check(series([6]), make_forecast(rate))
+                self.assertEqual(kinds(alerts), expected)
+                for alert in alerts:
+                    self.assertIs(alert.level, Level.IMPORTANT)
+                    self.assertFalse(alert.needs_ack)
 
     def test_rate_is_taken_from_forecast(self):
-        self.assertEqual(kinds(check(series([6, 6, 6, 6]), Forecast(-0.2))), ["fast_drop"])
-        self.assertEqual(check(series([10, 8, 6, 4]), Forecast(0)), [])
+        self.assertEqual(kinds(check(series([6, 6, 6, 6]), make_forecast(-0.2))), ["fast_drop"])
+        self.assertEqual(check(series([10, 8, 6, 4]), make_forecast(0)), [])
 
     def test_no_forecast_has_no_rate_alert(self):
         self.assertEqual(check(series([10, 8, 6, 4])), [])
 
     def test_invalid_forecast_does_not_hide_value_alert(self):
         for rate in [float("nan"), float("inf"), -float("inf")]:
-            self.assertEqual(kinds(check(series([2.8]), Forecast(rate))), ["very_low"])
+            self.assertEqual(kinds(check(series([2.8]), make_forecast(rate))), ["very_low"])
 
     def test_low_and_fast_drop_can_coexist(self):
-        self.assertEqual(kinds(check(series([3.5]), Forecast(-0.2))), ["low", "fast_drop"])
+        self.assertEqual(kinds(check(series([3.5]), make_forecast(-0.2))), ["low", "fast_drop"])
 
 
 class DurationTests(unittest.TestCase):
@@ -98,9 +111,9 @@ class DurationTests(unittest.TestCase):
 class NoDataTests(unittest.TestCase):
     def test_age_thresholds(self):
         for minutes, value, expected in [
-            (19, 6, None), (20, 6, AlertLevel.IMPORTANT),
-            (29, 3.5, AlertLevel.IMPORTANT), (30, 3.5, AlertLevel.CRITICAL),
-            (30, 3.9, AlertLevel.IMPORTANT), (30, 6, AlertLevel.IMPORTANT),
+            (19, 6, None), (20, 6, Level.IMPORTANT),
+            (29, 3.5, Level.IMPORTANT), (30, 3.5, Level.CRITICAL),
+            (30, 3.9, Level.IMPORTANT), (30, 6, Level.IMPORTANT),
         ]:
             with self.subTest(minutes=minutes, value=value):
                 result = check(series([value]), now=NOW + timedelta(minutes=minutes))
@@ -108,10 +121,11 @@ class NoDataTests(unittest.TestCase):
                     self.assertEqual(result, [])
                 else:
                     self.assertEqual(kinds(result), ["no_data"])
-                    self.assertEqual(result[0].level, expected)
+                    self.assertIs(result[0].level, expected)
+                    self.assertEqual(result[0].needs_ack, expected is Level.CRITICAL)
 
     def test_stale_rate_and_value_are_not_reissued(self):
-        result = check(series([2.9]), Forecast(-0.3), NOW + timedelta(minutes=20))
+        result = check(series([2.9]), make_forecast(-0.3), NOW + timedelta(minutes=20))
         self.assertEqual(kinds(result), ["no_data"])
         self.assertEqual(result[0].value, 2.9)
 
@@ -122,7 +136,7 @@ class NoDataTests(unittest.TestCase):
         history = series([3.5])
         self.assertEqual(check(history), check(history))
         self.assertEqual(check(history, now=NOW + timedelta(minutes=30))[0].level,
-                         AlertLevel.CRITICAL)
+                         Level.CRITICAL)
 
 
 class InputTests(unittest.TestCase):
@@ -147,7 +161,7 @@ class InputTests(unittest.TestCase):
 
     def test_aware_non_utc_is_converted(self):
         local = NOW.astimezone(timezone(timedelta(hours=3)))
-        self.assertEqual(check([Reading(local, 3.5)])[0].ts, NOW)
+        self.assertEqual(check([Reading(local, 3.5)])[0].created_at, NOW)
 
     def test_naive_timestamps_fail(self):
         with self.assertRaisesRegex(ValueError, "timezone"):
@@ -162,9 +176,9 @@ class InputTests(unittest.TestCase):
 
     def test_pure_repeatable_and_no_input_mutation(self):
         history = series([3.5, 3.4])
-        forecast = Forecast(-0.2)
-        recent = [Alert("low", AlertLevel.IMPORTANT, 3.5, NOW)]
-        mode = {"name": "normal"}
+        forecast = make_forecast(-0.2)
+        recent = [Alert(kind=AlertKind.LOW, level=Level.IMPORTANT, created_at=NOW, value=3.5)]
+        mode = ModeState()
         before = deepcopy((history, forecast, mode, recent))
         first = evaluate(history, forecast, mode, NOW, recent)
         second = evaluate(history, forecast, mode, NOW, recent)
@@ -172,28 +186,45 @@ class InputTests(unittest.TestCase):
         self.assertEqual((history, forecast, mode, recent), before)
 
 
-class SyntheticScenarioTests(unittest.TestCase):
-    """Hand-built sequences; not the unavailable official facts fixtures."""
+class CgmScenarioTests(unittest.TestCase):
+    DATA = Path(__file__).resolve().parents[1] / "fake_cgm" / "data"
+    MSK = timezone(timedelta(hours=3))
+    FACTS_BY_KIND = {
+        AlertKind.LOW: "first_below_3_9",
+        AlertKind.VERY_LOW: "first_below_3_0",
+        AlertKind.HIGH_1H: "above_10_0_for_1h_at",
+        AlertKind.VERY_HIGH_1H: "above_13_9_for_1h_at",
+        AlertKind.FAST_DROP: "first_fast_drop",
+        AlertKind.FAST_RISE: "first_fast_rise",
+    }
+
+    def check_scenario(self, name):
+        meta = json.loads((self.DATA / "scenarios.json").read_text(encoding="utf-8"))
+        facts = meta[name]["facts"]
+        readings = clean(json.loads((self.DATA / f"{name}.json").read_text(encoding="utf-8")))
+        self.assertEqual(len(readings), facts["points"])
+        first_times = {}
+        for i, reading in enumerate(readings, start=1):
+            history = readings[:i]
+            for alert in check(history, predict(history), now=reading.ts):
+                first_times.setdefault(alert.kind, alert.created_at.astimezone(self.MSK).strftime("%H:%M"))
+        expected = {kind: facts[key] for kind, key in self.FACTS_BY_KIND.items() if facts[key] is not None}
+        self.assertEqual(first_times, expected)
 
     def test_normal(self):
-        for value in [5.5, 5.6, 5.7, 5.6, 5.5]:
-            self.assertEqual(check(series([value]), Forecast(0.02)), [])
+        self.check_scenario("normal")
 
     def test_night_hypo(self):
-        history = series([5.2, 4.7, 4.1, 3.8, 3.3, 2.9])
-        observed = [kinds(check(history[:i], now=history[i-1].ts))
-                    for i in range(1, len(history) + 1)]
-        self.assertEqual(observed, [[], [], [], ["low"], ["low"], ["very_low"]])
+        self.check_scenario("night_hypo")
 
     def test_fast_drop(self):
-        history = series([8, 7, 6, 5])
-        self.assertEqual(kinds(check(history, Forecast(-0.2))), ["fast_drop"])
+        self.check_scenario("fast_drop")
 
     def test_hyper_long(self):
-        history = series([14.5] * 19)
-        self.assertEqual(check(history[:12], now=history[11].ts), [])
-        self.assertEqual(kinds(check(history[:13], now=history[12].ts)), ["very_high_1h"])
-        self.assertEqual(kinds(check(history)), ["very_high_1h"])
+        self.check_scenario("hyper_long")
+
+    def test_meal(self):
+        self.check_scenario("meal")
 
 
 if __name__ == "__main__":
