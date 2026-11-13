@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,6 +49,7 @@ from app.alerts.antispam import EPISODE_KINDS
 from app.models import Alert, AlertKind, Level, Mode, ModeState, Reading
 
 UTC = timezone.utc
+log = logging.getLogger(__name__)
 
 
 class UTCDateTime(TypeDecorator):
@@ -395,7 +397,10 @@ def mark_ack(alert_id: int, who: int, at: datetime) -> bool:
                    or_(owner, trusted))
             .values(acked_at=at, acked_by=who)
         )
-        return result.rowcount == 1
+        ok = result.rowcount == 1
+    if ok:
+        log.info("ack alert_id=%s by chat %s", alert_id, who)
+    return ok
 
 
 def mark_sent(alert_id: int, at: datetime, message_id: int | None = None) -> None:
