@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from datetime import timedelta
+from zoneinfo import ZoneInfo
 
 from aiogram import Router
 from aiogram.filters import Command
@@ -36,10 +37,11 @@ def load_plot():
 
 def render(plot, readings: list[Reading], hours: int, tz: str | None) -> bytes:
     """
-    Вызов plot() по контракту из TODO: plot(readings, hours) → PNG.
-    TODO: сверить с Dev 4 — передаём tz, если plot его принимает; BytesIO тоже подходит.
+    plot(readings, hours, tz) из app/plot.py (Dev 4) → BytesIO с PNG.
+    tz он ждёт объектом часового пояса, а в БД — строка вроде "Europe/Moscow".
     """
-    kwargs = {"tz": tz} if "tz" in inspect.signature(plot).parameters else {}
+    zone = ZoneInfo(tz or "Europe/Moscow")
+    kwargs = {"tz": zone} if "tz" in inspect.signature(plot).parameters else {}
     image = plot(readings, hours, **kwargs)
     return image.getvalue() if hasattr(image, "getvalue") else image
 

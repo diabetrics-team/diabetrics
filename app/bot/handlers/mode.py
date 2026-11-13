@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from aiogram import Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
@@ -29,8 +30,12 @@ AFTER_HYPO_MINUTES = 15
 async def mode_menu(message: Message) -> None:
     if message.from_user is None:
         return
-    state = storage.get_mode(message.from_user.id)
-    await message.answer(format_mode_menu(state, clock.now()), reply_markup=modes_keyboard())
+    now = clock.now()
+    state, scheduled = storage.current_mode(message.from_user.id, now)
+    s = storage.get_settings(message.from_user.id)
+    night = (s.night_start, s.night_end) if s else ("23:00", "07:00")   # как по умолчанию в БД
+    text = format_mode_menu(state, now, scheduled, s.tz if s else None, *night)
+    await message.answer(text, reply_markup=modes_keyboard())
 
 
 @router.callback_query(ModeCb.filter())
@@ -45,8 +50,13 @@ async def mode_chosen(callback: CallbackQuery, callback_data: ModeCb) -> None:
     title = texts.MODES[mode]["title"]
 
     if mode is Mode.AFTER_MEAL and callback_data.minutes not in AFTER_MEAL_OPTIONS:
-        # Первое нажатие (minutes=0) — спросить длительность.
-        await callback.message.edit_text(
+        # Первое нажатие (minutes=0) — спросить длительность отдельным сообщением,
+        # а у исходного только убрать кнопки: если это оценка NutriLens, КБЖУ остаётся в чате.
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
+        await callback.message.answer(
             texts.MODE_ASK_DURATION.format(title=title),
             reply_markup=durations_keyboard(mode, AFTER_MEAL_OPTIONS),
         )

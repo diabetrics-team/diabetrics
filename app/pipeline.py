@@ -32,6 +32,7 @@ from app import clock
 from app.alerts.config import TRUSTED_AFTER_MINUTES
 from app.alerts.engine import evaluate, history_start_for_hysteresis
 from app.alerts.escalation import escalation_step
+from app.bot.night import effective_mode
 from app.bot.notify import notify, notify_trusted
 from app.forecast import predict
 from app.models import ActionType, Alert, AlertKind, ModeState
@@ -98,7 +99,7 @@ async def process_user(user: Any, repo: Any, client_factory: Any) -> list[Alert]
     if not history and last_ts is not None:
         # Даже после длительной потери сигнала нужно помнить последний замер.
         history = repo.readings_since(user.id, last_ts - HISTORY)
-    mode = repo.get_mode(user.id)
+    mode = effective_mode(repo.get_mode(user.id), user, now)   # ночной режим по расписанию (Dev 3)
     recent = list({a.id: a for a in (
         repo.latest_episode_alerts(user.id, now)
         + repo.recent_alerts(user.id, now - RECENT)

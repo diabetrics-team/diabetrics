@@ -4,7 +4,8 @@
 Владелец: Dev 3 (API), Dev 1 (реализация на БД).
 Было в памяти — теперь в SQLite через app/db.py, поэтому pipeline видит тех же
 пользователей и режимы, а после перезапуска бота ничего не теряется.
-API: BotUser, get_user, save_user, get_mode, set_mode, reset.
+API: BotUser, get_user, save_user, get_mode, set_mode, current_mode,
+Settings, get_settings, save_settings, reset.
 Доверенные лица и уведомления бот берёт прямо из app/db.py.
 
 Если БД ещё не подключена (тесты бота, запуск без main.py), подключается
@@ -13,8 +14,10 @@ API: BotUser, get_user, save_user, get_mode, set_mode, reset.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from app import clock, db
+from app.bot import night
 from app.models import ModeState
 
 
@@ -65,3 +68,42 @@ def set_mode(telegram_id: int, state: ModeState) -> None:
 def reset() -> None:
     """Для тестов: очистить всё (новая пустая БД в памяти)."""
     db.configure("sqlite:///:memory:")
+
+
+def current_mode(telegram_id: int, now: datetime) -> tuple[ModeState, bool]:
+    """Режим для показа в /now и /mode — с учётом ночного расписания.
+
+    Второе значение — True, если «Ночной» включён расписанием, а не вручную.
+    """
+    _ensure_db()
+    u = db.get_user_by_chat(telegram_id)
+    if u is None:
+        return ModeState(), False
+    state = db.get_mode(u.id)
+    effective = night.effective_mode(state, u, now)
+    return effective, effective is not state
+
+
+@dataclass(slots=True)
+class Settings:
+    escalation_minutes: int     # через сколько минут без ответа писать доверенному лицу
+    night_start: str            # "23:00"; night_start == night_end — расписание выключено
+    night_end: str
+    tz: str | None
+
+
+def get_settings(telegram_id: int) -> Settings | None:
+    _ensure_db()
+    u = db.get_user_by_chat(telegram_id)
+    if u is None:
+        return None
+    return Settings(u.escalation_minutes, u.night_start, u.night_end, u.tz)
+
+
+def save_settings(telegram_id: int, **fields: object) -> None:
+    """fields — escalation_minutes, night_start, night_end, tz."""
+    unknown = set(fields) - set(Settings.__slots__)
+    if unknown:
+        raise ValueError(f"Нет таких настроек: {sorted(unknown)}")
+    _ensure_db()
+    db.upsert_user(telegram_id, clock.now(), **fields)

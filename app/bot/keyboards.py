@@ -13,6 +13,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.bot import texts
 from app.bot.formatting import format_duration
+from app.bot.options import ESCALATION_OPTIONS, NIGHT_END_OPTIONS, NIGHT_START_OPTIONS
 from app.models import Mode
 
 GRAPH_HOURS = (3, 6, 24)
@@ -45,6 +46,21 @@ class GraphCb(CallbackData, prefix="graph"):
     hours: int
 
 
+class SettingsCb(CallbackData, prefix="set"):
+    """what: menu | esc | night | nightoff | tz; value — выбранное значение ("" — показать варианты).
+    Двоеточие в данных кнопки — разделитель, поэтому время пишется без него: "2300-0700"."""
+    what: str
+    value: str = ""
+
+
+def hhmm_to_cb(value: str) -> str:
+    return value.replace(":", "")
+
+
+def cb_to_hhmm(value: str) -> str:
+    return f"{value[:2]}:{value[2:]}"
+
+
 def ack_keyboard(alert_id: int, text: str = texts.BUTTON_OK) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text=text, callback_data=AckCb(alert_id=alert_id))
@@ -67,10 +83,14 @@ def durations_keyboard(mode: Mode, options: tuple[int, ...]) -> InlineKeyboardMa
     return kb.as_markup()
 
 
-def tz_keyboard() -> InlineKeyboardMarkup:
+def tz_keyboard(for_settings: bool = False) -> InlineKeyboardMarkup:
+    """Онбординг — TzCb; из /settings — SettingsCb, плюс «Назад»."""
     kb = InlineKeyboardBuilder()
     for name, label in texts.TIMEZONES.items():
-        kb.button(text=label, callback_data=TzCb(name=name))
+        data = SettingsCb(what="tz", value=name) if for_settings else TzCb(name=name)
+        kb.button(text=label, callback_data=data)
+    if for_settings:
+        kb.button(text=texts.BUTTON_BACK, callback_data=SettingsCb(what="menu"))
     kb.adjust(2)
     return kb.as_markup()
 
@@ -101,4 +121,49 @@ def graph_keyboard() -> InlineKeyboardMarkup:
     for hours in GRAPH_HOURS:
         kb.button(text=f"{hours} ч", callback_data=GraphCb(hours=hours))
     kb.adjust(len(GRAPH_HOURS))
+    return kb.as_markup()
+
+
+def meal_keyboard() -> InlineKeyboardMarkup:
+    """Под оценкой NutriLens: «Включить „После еды“» — дальше спросит длительность mode.py."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text=texts.BUTTON_MEAL_MODE, callback_data=ModeCb(kind=Mode.AFTER_MEAL.value))
+    return kb.as_markup()
+
+
+def settings_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text=texts.BUTTON_SET_ESCALATION, callback_data=SettingsCb(what="esc"))
+    kb.button(text=texts.BUTTON_SET_NIGHT, callback_data=SettingsCb(what="night"))
+    kb.button(text=texts.BUTTON_SET_TZ, callback_data=SettingsCb(what="tz"))
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def escalation_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for minutes in ESCALATION_OPTIONS:
+        kb.button(text=f"{minutes} мин", callback_data=SettingsCb(what="esc", value=str(minutes)))
+    kb.button(text=texts.BUTTON_BACK, callback_data=SettingsCb(what="menu"))
+    kb.adjust(len(ESCALATION_OPTIONS), 1)
+    return kb.as_markup()
+
+
+def night_start_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for start in NIGHT_START_OPTIONS:
+        kb.button(text=start, callback_data=SettingsCb(what="night", value=hhmm_to_cb(start)))
+    kb.button(text=texts.BUTTON_NIGHT_OFF, callback_data=SettingsCb(what="nightoff"))
+    kb.button(text=texts.BUTTON_BACK, callback_data=SettingsCb(what="menu"))
+    kb.adjust(len(NIGHT_START_OPTIONS), 1, 1)
+    return kb.as_markup()
+
+
+def night_end_keyboard(start: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for end in NIGHT_END_OPTIONS:
+        value = f"{hhmm_to_cb(start)}-{hhmm_to_cb(end)}"
+        kb.button(text=end, callback_data=SettingsCb(what="night", value=value))
+    kb.button(text=texts.BUTTON_BACK, callback_data=SettingsCb(what="night"))
+    kb.adjust(len(NIGHT_END_OPTIONS), 1)
     return kb.as_markup()
