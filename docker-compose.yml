@@ -4,7 +4,15 @@ services:
     env_file: .env
     volumes:
       - ./data:/app/data        # SQLite живёт здесь и переживает пересборку
-    restart: unless-stopped
+    restart: unless-stopped     # упал процесс или перезагрузился сервер — поднимется сам
+    ports:
+      - "127.0.0.1:8080:8080"   # /health; для внешнего мониторинга убрать 127.0.0.1:
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
 
   # Фейковый Nightscout для демо и обкатки. Запускается только с профилем demo:
   #   docker compose --profile demo up -d
