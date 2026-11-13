@@ -13,8 +13,7 @@
 - одно показание не обрабатывается дважды: запрашиваем только новее последнего в БД,
   сохраняем с уникальностью (user_id, ts);
 - открытые критические читаются из БД, поэтому эскалация переживает перезапуск;
-- повтор и эскалация идемпотентны: даже если escalation_step вернёт REPEAT на каждом
-  тике, повтор уйдёт не чаще REPEAT_EVERY, а доверенному — один раз;
+- состояние повтора и эскалации читается из БД;
 - ошибка у одного пользователя не мешает остальным.
 """
 from __future__ import annotations
@@ -30,11 +29,12 @@ from pathlib import Path
 from typing import Any
 
 from app import clock
-from app.alerts.engine import evaluate
+from app.alerts.config import TRUSTED_AFTER_MINUTES
+from app.alerts.engine import evaluate, history_start_for_hysteresis
 from app.alerts.escalation import escalation_step
 from app.bot.notify import notify, notify_trusted
 from app.forecast import predict
-from app.models import ActionType, Alert, AlertKind, Level, ModeState
+from app.models import ActionType, Alert, AlertKind, ModeState
 from app.ns.clean import clean
 
 log = logging.getLogger(__name__)
@@ -42,10 +42,6 @@ log = logging.getLogger(__name__)
 HISTORY = timedelta(hours=2)          # сколько истории отдаём predict/evaluate
 RECENT = timedelta(hours=1)           # recent_alerts для антиспама
 FIRST_FETCH_COUNT = 36                # первый опрос нового пользователя: ~3 ч при шаге 5 мин
-REPEAT_EVERY = timedelta(minutes=5)   # повтор критического не чаще
-# Временная защита от спама, пока у Dev 2 нет антиспама (день 4): тот же kind
-# не чаще раза в DEDUP_WINDOW. С антиспамом движка не конфликтует — просто дублирует.
-DEDUP_WINDOW = timedelta(minutes=15)
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "fake_cgm" / "data"
 
@@ -54,26 +50,6 @@ def _client(url: str, token: str | None) -> Any:
     from app.ns.client import NightscoutClient   # httpx нужен только живому режиму
 
     return NightscoutClient(url, token)
-
-
-_RANK = {Level.INFO: 0, Level.IMPORTANT: 1, Level.CRITICAL: 2}
-
-
-def _is_duplicate(alert: Alert, recent: list[Alert], now: datetime) -> bool:
-    """Такое же уведомление того же или более высокого уровня уже было за DEDUP_WINDOW.
-
-    Повышение уровня (no_data: важное на 20-й минуте → критическое на 30-й) проходит всегда.
-    Пока критическое того же вида без «Я в порядке», новое не создаётся: повторы — дело
-    эскалации, иначе у каждого дубля была бы своя цепочка до доверенного лица.
-    """
-    for a in recent:
-        if a.kind != alert.kind:
-            continue
-        if a.needs_ack and a.acked_at is None:
-            return True     # то же критическое ещё ждёт ответа — его повторяет эскалация
-        if now - a.created_at < DEDUP_WINDOW and _RANK[Level(a.level)] >= _RANK[Level(alert.level)]:
-            return True
-    return False
 
 
 # --------------------------------------------------------------------------- tick ---
@@ -119,15 +95,21 @@ async def process_user(user: Any, repo: Any, client_factory: Any) -> list[Alert]
                  user.id, len(new), new[-1].mmol, f"{new[-1].ts:%H:%M}")
 
     history = repo.readings_since(user.id, now - HISTORY)
+    if not history and last_ts is not None:
+        # Даже после длительной потери сигнала нужно помнить последний замер.
+        history = repo.readings_since(user.id, last_ts - HISTORY)
     mode = repo.get_mode(user.id)
-    recent = repo.recent_alerts(user.id, now - RECENT)
-    seen = {a.id for a in recent}
-    recent += [a for a in repo.open_alerts(user.id) if a.id not in seen]   # открытые старше часа
+    recent = list({a.id: a for a in (
+        repo.latest_episode_alerts(user.id, now)
+        + repo.recent_alerts(user.id, now - RECENT)
+        + repo.open_alerts(user.id)
+    )}.values())
+    since = history_start_for_hysteresis(history, recent, now)
+    if since is not None:
+        history = repo.readings_since(user.id, since)
 
     sent: list[Alert] = []
     for alert in evaluate(history, predict(history), mode, now, recent):
-        if _is_duplicate(alert, recent, now):
-            continue
         alert.user_id = user.id
         repo.save_alert(alert, sent_at=now)       # сначала БД: кнопке нужен alert.id
         message_id = await notify(alert, user.chat_id)
@@ -141,17 +123,19 @@ async def process_user(user: Any, repo: Any, client_factory: Any) -> list[Alert]
 
 
 async def _escalate(user: Any, repo: Any, now: datetime) -> None:
-    open_alerts = repo.open_alerts(user.id)
-    if not open_alerts:
-        return
-    for action in escalation_step(open_alerts, now):
+    open_alerts = [a for a in repo.open_alerts(user.id) if a.id is not None and a.escalated_at is None]
+    repeated = {
+        a.id for a in open_alerts
+        if (last := repo.last_sent_at(a.id)) is not None and last > a.created_at
+    }
+    for action in escalation_step(
+        open_alerts, now, repeated_alert_ids=repeated,
+        trusted_after_minutes=getattr(user, "escalation_minutes", TRUSTED_AFTER_MINUTES),
+    ):
         alert = action.alert
         if action.type is ActionType.REPEAT:
-            last = repo.last_sent_at(alert.id)
-            if last is not None and now - last < REPEAT_EVERY:
-                continue
-            await notify(alert, user.chat_id)
-            repo.mark_sent(alert.id, now)
+            message_id = await notify(alert, user.chat_id)
+            repo.mark_sent(alert.id, now, message_id)
         elif action.type is ActionType.NOTIFY_TRUSTED:
             if not repo.mark_escalated(alert.id, now):      # уже отправляли
                 continue
@@ -188,21 +172,26 @@ async def replay(scenario: str, mode: ModeState | None = None, chat_id: int = 0)
     readings = clean(json.loads((DATA_DIR / f"{scenario}.json").read_text()))
     mode = mode or ModeState()
     sent: list[Alert] = []
+    repeated: set[int] = set()
     for i, r in enumerate(readings):
         clock.freeze(r.ts)
         now = clock.now()
         history = [x for x in readings[: i + 1] if now - x.ts <= HISTORY]
-        recent = [a for a in sent if now - a.created_at <= RECENT or (a.needs_ack and a.acked_at is None)]
-        for alert in evaluate(history, predict(history), mode, now, recent):
-            if _is_duplicate(alert, recent, now):
-                continue
+        since = history_start_for_hysteresis(history, sent, now)
+        if since is not None:
+            history = [x for x in readings[: i + 1] if x.ts >= since]
+        for alert in evaluate(history, predict(history), mode, now, sent):
             alert.id = len(sent) + 1          # в настоящем pipeline id даёт БД
             sent.append(alert)
-            recent.append(alert)
             await notify(alert, chat_id)
         open_alerts = [a for a in sent if a.needs_ack and a.acked_at is None]
-        for action in escalation_step(open_alerts, now):
+        for action in escalation_step(open_alerts, now, repeated_alert_ids=repeated):
             print(f"[escalation] {action.type.value} → alert {action.alert.id}")
+            if action.type is ActionType.REPEAT:
+                assert action.alert.id is not None
+                repeated.add(action.alert.id)
+            else:
+                action.alert.escalated_at = now
     clock.unfreeze()
     return sent
 

@@ -148,6 +148,35 @@ def test_open_alerts_survive_restart(tmp_path):
     assert again.id == a.id and again.needs_ack and again.created_at == NOW
 
 
+def test_ack_by_id_checks_confirmed_access_in_storage(mem):
+    from app.alerts.escalation import ack
+
+    owner = _user()
+    critical = db.save_alert(Alert(Level.CRITICAL, AlertKind.VERY_LOW, NOW, 2.8, True, user_id=owner.id))
+    db.create_invite(owner.id, "pending", NOW)
+    assert ack(critical.id, 555, NOW) is None
+    db.accept_invite("pending", 555, "trusted", NOW)
+    assert ack(critical.id, 999, NOW) is None
+    confirmed = ack(critical.id, 555, NOW + timedelta(minutes=1))
+    assert confirmed.acked_by == 555
+    assert ack(critical.id, owner.chat_id, NOW + timedelta(minutes=2)) is None
+    assert db.get_alert(critical.id).acked_at == NOW + timedelta(minutes=1)
+    assert db.open_alerts(owner.id) == []
+
+
+def test_latest_episode_alerts_keeps_older_severities_and_ignores_future(mem):
+    u = _user()
+    def save(kind, level, offset):
+        return db.save_alert(Alert(level, kind, NOW + timedelta(hours=offset), user_id=u.id))
+
+    save(AlertKind.LOW, Level.IMPORTANT, -7)
+    low = save(AlertKind.LOW, Level.IMPORTANT, -6)
+    night_low = save(AlertKind.LOW, Level.CRITICAL, -5)
+    save(AlertKind.LOW, Level.IMPORTANT, 1)
+    save(AlertKind.FAST_RISE, Level.IMPORTANT, -1)
+    assert {a.id for a in db.latest_episode_alerts(u.id, NOW)} == {low.id, night_low.id}
+
+
 def test_trusted_invite(mem):
     u = _user()
     db.create_invite(u.id, "abc", NOW)
