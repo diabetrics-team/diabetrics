@@ -14,7 +14,11 @@
   сохраняем с уникальностью (user_id, ts);
 - открытые критические читаются из БД, поэтому эскалация переживает перезапуск;
 - состояние повтора и эскалации читается из БД;
-- ошибка у одного пользователя не мешает остальным.
+- ошибка у одного пользователя не мешает остальным;
+- watchdog: Nightscout не отвечает дольше NS_DOWN_ALERT_AFTER → одно важное ns_unreachable
+  на сбой; состояние для /health — в HEALTH;
+- пользователь заблокировал бота → is_active=False, его больше не опрашиваем;
+- каждое уведомление, повтор, эскалация пишутся в лог (токены вырезает app/logs.py).
 """
 from __future__ import annotations
 
@@ -24,7 +28,9 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime, timedelta
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +40,7 @@ from app.alerts.engine import evaluate, history_start_for_hysteresis
 from app.alerts.escalation import escalation_step
 from app.bot.notify import notify, notify_trusted
 from app.forecast import predict
-from app.models import ActionType, Alert, AlertKind, ModeState
+from app.models import ActionType, Alert, AlertKind, Level, ModeState
 from app.ns.clean import clean
 
 log = logging.getLogger(__name__)
@@ -42,6 +48,7 @@ log = logging.getLogger(__name__)
 HISTORY = timedelta(hours=2)          # сколько истории отдаём predict/evaluate
 RECENT = timedelta(hours=1)           # recent_alerts для антиспама
 FIRST_FETCH_COUNT = 36                # первый опрос нового пользователя: ~3 ч при шаге 5 мин
+NS_DOWN_ALERT_AFTER = timedelta(minutes=10)   # watchdog: столько без связи → ns_unreachable
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "fake_cgm" / "data"
 
@@ -52,6 +59,72 @@ def _client(url: str, token: str | None) -> Any:
     return NightscoutClient(url, token)
 
 
+# ------------------------------------------------------------------- состояние ---
+
+@dataclass
+class Health:
+    """Что видно снаружи через /health. Время — настоящее (не clock.now): это про живость процесса."""
+
+    started_mono: float = field(default_factory=time.monotonic)
+    last_tick_mono: float | None = None
+    last_tick_at: datetime | None = None
+    users: int = 0
+    ns_down: int = 0
+    errors: int = 0               # пользователей с ошибкой на последнем тике
+
+
+HEALTH = Health()
+_ns_down_since: dict[int, datetime] = {}   # user_id → когда Nightscout перестал отвечать
+_ns_down_alerted: set[int] = set()         # кому уже отправили ns_unreachable за этот сбой
+
+
+def _is_blocked(error: Exception) -> bool:
+    """Пользователь заблокировал бота (aiogram TelegramForbiddenError), без импорта aiogram."""
+    return type(error).__name__ == "TelegramForbiddenError"
+
+
+async def _send(user: Any, repo: Any, alert: Alert, *, repeat: bool = False) -> int | None:
+    """notify() + лог. Ошибка Telegram не роняет обработку пользователя."""
+    what = "repeat" if repeat else "alert"
+    try:
+        message_id = await notify(alert, user.chat_id)
+    except Exception as e:
+        if _is_blocked(e):
+            repo.set_active(user.id, False)
+            log.warning("user_id=%s заблокировал бота — опрос остановлен", user.id)
+        else:
+            log.exception("%s alert_id=%s user_id=%s: не отправлено", what, alert.id, user.id)
+        return None
+    log.info("%s alert_id=%s user_id=%s %s/%s value=%s",
+             what, alert.id, user.id, Level(alert.level).value, AlertKind(alert.kind).value,
+             alert.value)
+    return message_id
+
+
+async def _ns_failed(user: Any, repo: Any, error: Exception) -> None:
+    now = clock.now()
+    since = _ns_down_since.setdefault(user.id, now)
+    down_for = now - since
+    log.warning("Nightscout user_id=%s не отвечает %d мин: %s",
+                user.id, down_for.total_seconds() // 60, error)
+    if user.id in _ns_down_alerted or down_for < NS_DOWN_ALERT_AFTER:
+        return
+    alert = Alert(Level.IMPORTANT, AlertKind.NS_UNREACHABLE, now, user_id=user.id)
+    repo.save_alert(alert, sent_at=now)
+    message_id = await _send(user, repo, alert)
+    if message_id is not None:
+        repo.mark_sent(alert.id, now, message_id)
+    _ns_down_alerted.add(user.id)
+
+
+def _ns_ok(user: Any) -> None:
+    since = _ns_down_since.pop(user.id, None)
+    if since is not None:
+        _ns_down_alerted.discard(user.id)
+        log.info("Nightscout user_id=%s снова отвечает (не было связи %d мин)",
+                 user.id, (clock.now() - since).total_seconds() // 60)
+
+
 # --------------------------------------------------------------------------- tick ---
 
 async def tick(repo: Any = None, client_factory: Any = None) -> None:
@@ -59,12 +132,18 @@ async def tick(repo: Any = None, client_factory: Any = None) -> None:
     if repo is None:
         from app import db as repo
     client_factory = client_factory or _client
-    for user in repo.active_users():
+    users = repo.active_users()
+    errors = 0
+    for user in users:
         try:
             await process_user(user, repo, client_factory)
         except Exception:
             # Ошибка одного пользователя (битые данные, баг в правиле) не роняет цикл.
+            errors += 1
             log.exception("pipeline: ошибка при обработке user_id=%s", user.id)
+    HEALTH.last_tick_mono = time.monotonic()
+    HEALTH.last_tick_at = datetime.now(timezone.utc)
+    HEALTH.users, HEALTH.errors, HEALTH.ns_down = len(users), errors, len(_ns_down_since)
 
 
 async def process_user(user: Any, repo: Any, client_factory: Any) -> list[Alert]:
@@ -81,12 +160,13 @@ async def process_user(user: Any, repo: Any, client_factory: Any) -> list[Alert]
             else:
                 raw = await ns.get_entries(since=last_ts)
     except NSError as e:
-        # Отдельное уведомление ns_unreachable — watchdog, день 4.
-        log.warning("pipeline: Nightscout user_id=%s: %s", user.id, e)
+        await _ns_failed(user, repo, e)
         if clock.uses_server_time():
             # Демо-часы идут по серверу; без связи «сейчас» неизвестно — иначе ложный no_data.
             return []
         raw = []            # прод: evaluate всё равно запускаем — no_data считается по времени
+    else:
+        _ns_ok(user)
 
     new = repo.save_readings(user.id, [r for r in clean(raw) if last_ts is None or r.ts > last_ts])
     now = clock.now()
@@ -112,7 +192,7 @@ async def process_user(user: Any, repo: Any, client_factory: Any) -> list[Alert]
     for alert in evaluate(history, predict(history), mode, now, recent):
         alert.user_id = user.id
         repo.save_alert(alert, sent_at=now)       # сначала БД: кнопке нужен alert.id
-        message_id = await notify(alert, user.chat_id)
+        message_id = await _send(user, repo, alert)
         if message_id is not None:
             repo.mark_sent(alert.id, now, message_id)
         recent.append(alert)
@@ -134,7 +214,7 @@ async def _escalate(user: Any, repo: Any, now: datetime) -> None:
     ):
         alert = action.alert
         if action.type is ActionType.REPEAT:
-            message_id = await notify(alert, user.chat_id)
+            message_id = await _send(user, repo, alert, repeat=True)
             repo.mark_sent(alert.id, now, message_id)
         elif action.type is ActionType.NOTIFY_TRUSTED:
             if not repo.mark_escalated(alert.id, now):      # уже отправляли
@@ -146,7 +226,13 @@ async def _escalate(user: Any, repo: Any, now: datetime) -> None:
             if not chats:
                 log.warning("pipeline: эскалация alert_id=%s, но доверенного лица нет", alert.id)
             for chat_id in chats:
-                await notify_trusted(alert, chat_id, minutes)
+                try:
+                    await notify_trusted(alert, chat_id, minutes)
+                except Exception:
+                    log.exception("escalation alert_id=%s → chat %s: не отправлено", alert.id, chat_id)
+                    continue
+                log.info("escalation alert_id=%s user_id=%s → доверенному chat %s, без ответа %s мин",
+                         alert.id, user.id, chat_id, minutes)
 
 
 # ------------------------------------------------------------------- живой прогон ---
