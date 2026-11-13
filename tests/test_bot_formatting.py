@@ -11,7 +11,15 @@ from pathlib import Path
 import pytest
 
 from app.bot import notify, texts
-from app.bot.formatting import describe_mode, format_age, format_alert, format_duration, format_now
+from app.bot.formatting import (
+    describe_mode,
+    format_age,
+    format_alert,
+    format_duration,
+    format_local_time,
+    format_now,
+    format_trusted_alert,
+)
 from app.forecast import predict
 from app.models import Alert, AlertKind, Forecast, Level, Mode, ModeState, Reading
 from app.ns.clean import clean
@@ -70,7 +78,22 @@ def test_notify_without_bot_prints_to_console(capsys):
     asyncio.run(notify.notify(alert, chat_id=42))
     out = capsys.readouterr().out
     assert "[notify → 42] 🔴 Очень низкий сахар: 2.8 ммоль/л" in out
-    assert "<b>" not in out and "[Я в порядке]" in out
+    assert "<b>" not in out and "[кнопка]" in out
+
+
+def test_trusted_alert_text():
+    alert = Alert(Level.CRITICAL, AlertKind.VERY_LOW, T0, value=2.84)
+    text = format_trusted_alert(alert, "Аня <3", "DoubleDown", 12)
+    assert text.startswith("🔴 <b>Аня &lt;3 не отвечает на уведомление уже 12 мин.</b>")   # имя экранировано
+    assert "Сахар: 2.8 ммоль/л ↓↓\n" in text
+    no_info = format_trusted_alert(alert, None, None, 5)
+    assert no_info.startswith("🔴 <b>Близкий вам человек не отвечает")
+    assert "Сахар: 2.8 ммоль/л\n" in no_info, "без стрелки — без пробела в конце строки"
+
+
+def test_format_local_time():
+    assert format_local_time(T0, "Asia/Yekaterinburg") == "17:00"
+    assert format_local_time(T0, None) == "15:00"   # по умолчанию Москва, как в БД
 
 
 # --- /now на сценариях fake_cgm ---

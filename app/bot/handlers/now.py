@@ -10,34 +10,29 @@ from aiogram.filters import Command
 from aiogram.types import Message
 
 from app import clock
-from app.bot import nightscout, storage, texts
+from app.bot import storage, texts
+from app.bot.data import fetch_readings
 from app.bot.formatting import format_now
 from app.forecast import predict
-from app.ns.clean import clean
+from app.ns.client import NSAuthError, NSError
 
 router = Router(name="now")
+HISTORY_COUNT = 36   # ≈ 3 часа при шаге 5 мин — с запасом для прогноза
 
 
 @router.message(Command("now"))
 async def now_cmd(message: Message) -> None:
     user = storage.get_user(message.from_user.id) if message.from_user else None
-    if user is None:
+    if user is None or not user.ns_url:
         await message.answer(texts.NOW_NOT_CONNECTED)
         return
     try:
-        server_ms = await nightscout.get_server_time(user.ns_url, user.ns_token)
-        raw = await nightscout.get_entries(user.ns_url, user.ns_token)
-    except nightscout.NsBadToken:
+        readings = await fetch_readings(user, HISTORY_COUNT)
+    except NSAuthError:
         await message.answer(texts.ERROR_NS_BAD_TOKEN)
         return
-    except nightscout.NsUnavailable:
+    except NSError:
         await message.answer(texts.ERROR_NS_UNAVAILABLE)
         return
-
-    # С CLOCK=nightscout «сейчас» берётся с сервера (fake-NS живёт в виртуальном времени),
-    # иначе «обновлено N мин назад» разойдётся с данными. С CLOCK=system ничего не меняется.
-    clock.sync_with_server(server_ms)
-    now = clock.now()
-    readings = clean(raw)
-    text = format_now(readings, predict(readings), storage.get_mode(user.telegram_id), now)
+    text = format_now(readings, predict(readings), storage.get_mode(user.telegram_id), clock.now())
     await message.answer(text)

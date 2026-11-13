@@ -15,10 +15,11 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, User
 
-from app.bot import nightscout, storage, texts
+from app.bot import storage, texts
 from app.bot.keyboards import OnboardingCb, TzCb, no_token_keyboard, tz_keyboard
+from app.ns.client import NightscoutClient, NSAuthError, NSError
 
 router = Router(name="onboarding")
 
@@ -80,31 +81,32 @@ async def got_token(message: Message, state: FSMContext) -> None:
         await message.delete()          # токен не должен остаться в истории чата
     except TelegramBadRequest:
         pass                            # уже удалено или слишком старое — не страшно
-    await _check_and_save(message, message.from_user.id, state, token)
+    await _check_and_save(message, message.from_user, state, token)
 
 
 @router.callback_query(Onboarding.token, OnboardingCb.filter(F.action == "no_token"))
 async def no_token(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     if isinstance(callback.message, Message):
-        await _check_and_save(callback.message, callback.from_user.id, state, token=None)
+        await _check_and_save(callback.message, callback.from_user, state, token=None)
 
 
-async def _check_and_save(chat: Message, user_id: int, state: FSMContext, token: str | None) -> None:
+async def _check_and_save(chat: Message, user: User, state: FSMContext, token: str | None) -> None:
     # chat — любое сообщение из нужного чата, чтобы ответить туда;
-    # user_id берём отдельно: у сообщения с кнопкой автор — сам бот.
+    # user — кто подключается: у сообщения с кнопкой автор — сам бот, поэтому берём отдельно.
     url = (await state.get_data())["url"]
     await chat.answer(texts.ONBOARDING_CHECKING)
     try:
-        await nightscout.check(url, token)
-    except nightscout.NsBadToken:
+        async with NightscoutClient(url, token) as ns:   # клиент Dev 1: app/ns/client.py
+            await ns.check()
+    except NSAuthError:
         await chat.answer(texts.ONBOARDING_TOKEN_REJECTED, reply_markup=no_token_keyboard())
         return                          # остаёмся на шаге «токен»
-    except nightscout.NsUnavailable:
+    except NSError:
         await state.set_state(Onboarding.url)
         await chat.answer(texts.ONBOARDING_UNREACHABLE.format(url=escape(url)))
         return
-    storage.save_user(storage.BotUser(telegram_id=user_id, ns_url=url, ns_token=token))
+    storage.save_user(storage.BotUser(user.id, ns_url=url, ns_token=token, name=user.first_name))
     await state.set_state(Onboarding.tz)
     await chat.answer(texts.ONBOARDING_ASK_TZ, reply_markup=tz_keyboard())
 

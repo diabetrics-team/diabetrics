@@ -1,5 +1,5 @@
 """
-/start, /start invite_<код>, /help.
+/start и /help. Приглашение доверенного лица (/start invite_<код>) — в handlers/trusted.py.
 
 Владелец: Dev 3.
 """
@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from html import escape
 
-from aiogram import F, Router
+from aiogram import Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
@@ -19,14 +19,6 @@ from app.bot.keyboards import reconnect_keyboard
 router = Router(name="start")
 
 
-# Ссылка-приглашение t.me/<бот>?start=invite_<код> приходит как "/start invite_<код>".
-# Этот хендлер должен стоять ВЫШЕ обычного /start, иначе тот перехватит сообщение.
-@router.message(CommandStart(deep_link=True, magic=F.args.startswith("invite_")))
-async def start_invite(message: Message) -> None:
-    # TODO (День 3): достать код, найти пользователя в БД, привязать доверенное лицо.
-    await message.answer(texts.INVITE_NOT_READY)
-
-
 @router.message(CommandStart())
 async def start(message: Message, state: FSMContext) -> None:
     if message.from_user is None:
@@ -34,7 +26,7 @@ async def start(message: Message, state: FSMContext) -> None:
     # escape: включён HTML-режим, а в имени могут быть символы < > &
     await message.answer(texts.START.format(name=escape(message.from_user.first_name)))
     user = storage.get_user(message.from_user.id)
-    if user is None:
+    if user is None or not user.ns_url:
         await ask_url(message, state)
     else:
         await state.clear()

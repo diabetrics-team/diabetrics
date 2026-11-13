@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import math
 from datetime import datetime, timedelta
+from html import escape
+from zoneinfo import ZoneInfo
 
 from app.bot import texts
 from app.models import Alert, Forecast, ModeState, Reading
@@ -38,9 +40,24 @@ def format_age(ts: datetime, now: datetime) -> str:
     return texts.AGE_AGO.format(duration=format_duration(minutes))
 
 
+def format_local_time(moment: datetime, tz: str | None) -> str:
+    """«03:12» в часовом поясе пользователя (по умолчанию — Москва, как в БД)."""
+    return moment.astimezone(ZoneInfo(tz or "Europe/Moscow")).strftime("%H:%M")
+
+
 def format_alert(alert: Alert) -> str:
     template = texts.ALERTS[alert.kind]
     return f"{texts.LEVEL_EMOJI[alert.level]} " + template.format(value=fmt_mmol(alert.value))
+
+
+def format_trusted_alert(alert: Alert, name: str | None, direction: str | None, minutes: int) -> str:
+    """Сообщение доверенному лицу: кто, сахар, тренд, сколько минут нет ответа."""
+    return texts.TRUSTED_ALERT.format(
+        name=escape(name) if name else texts.TRUSTED_SOMEONE,
+        value=fmt_mmol(alert.value),
+        trend=texts.TREND_ARROWS.get(direction or "", ""),
+        minutes=minutes,
+    ).replace(" \n", "\n")   # без стрелки не оставлять пробел в конце строки
 
 
 def describe_mode(state: ModeState, now: datetime) -> str:

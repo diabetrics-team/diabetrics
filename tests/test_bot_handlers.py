@@ -1,12 +1,14 @@
 """
-Хендлеры бота на поддельном Telegram: онбординг, /now, /mode, notify с кнопкой.
-Telegram заменён FakeSession (запросы записываются, а не отправляются),
-Nightscout — подменёнными функциями. Сеть не нужна.
+Хендлеры бота на поддельном Telegram: онбординг, /now, /mode, /trusted, «Я в порядке»,
+/graph, notify. Telegram заменён FakeSession (запросы записываются, а не отправляются),
+Nightscout — подменёнными методами NightscoutClient, БД — SQLite в памяти (app/db.py Dev 1).
+Сеть не нужна.
 
 Владелец: Dev 3.
 """
 import asyncio
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -15,17 +17,29 @@ import pytest
 pytest.importorskip("aiogram")   # без aiogram эти тесты пропускаются, остальные работают
 
 from aiogram.client.session.base import BaseSession
-from aiogram.methods import AnswerCallbackQuery, DeleteMessage, EditMessageText, SendMessage
+from aiogram.methods import (
+    AnswerCallbackQuery,
+    DeleteMessage,
+    EditMessageReplyMarkup,
+    EditMessageText,
+    GetMe,
+    SendMessage,
+    SendPhoto,
+)
 from aiogram.types import CallbackQuery, Chat, Message, Update, User
 
-from app import clock
-from app.bot import nightscout, notify, storage, texts
+from app import clock, db, pipeline
+from app.bot import notify, storage, texts
+from app.bot.handlers import graph
 from app.bot.main import create_bot, create_dispatcher
-from app.models import Alert, AlertKind, Level, Mode
+from app.models import Alert, AlertKind, Level, Mode, Reading
+from app.ns.client import NightscoutClient, NSAuthError, NSUnavailable
 
 DATA = Path(__file__).resolve().parent.parent / "fake_cgm" / "data"
 USER = User(id=111, is_bot=False, first_name="Аня")
-CHAT = Chat(id=111, type="private")
+FRIEND = User(id=222, is_bot=False, first_name="Боря")
+STRANGER = User(id=333, is_bot=False, first_name="Вася")
+BOT_USERNAME = "diabetrics_test_bot"
 T0 = datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
 # Один Dispatcher на все тесты: роутеры — объекты модулей и подключаются только к одному.
 DP = create_dispatcher()
@@ -47,43 +61,53 @@ class FakeSession(BaseSession):
 
     async def make_request(self, bot, method, timeout=None):
         self.requests.append(method)
-        if isinstance(method, SendMessage):
-            return Message(message_id=len(self.requests), date=T0, chat=CHAT, text=method.text)
+        if isinstance(method, GetMe):
+            return User(id=999, is_bot=True, first_name="DiaBetrics", username=BOT_USERNAME)
+        if isinstance(method, (SendMessage, SendPhoto)):
+            chat = Chat(id=method.chat_id, type="private")
+            return Message(message_id=len(self.requests), date=T0, chat=chat, text=getattr(method, "text", None))
         return True
 
 
 class Tg:
-    """Пользователь пишет боту и жмёт кнопки; смотрим, что бот отправил."""
+    """Люди пишут боту и жмут кнопки; смотрим, что бот отправил."""
 
     def __init__(self) -> None:
         self.bot = create_bot("123456:TEST")
         self.session = FakeSession()
         self.bot.session = self.session
-        self.dp = DP
         self.n = 0
 
     async def _feed(self, **event) -> list:
         self.n += 1
         start = len(self.session.requests)
-        await self.dp.feed_update(self.bot, Update(update_id=self.n, **event))
+        await DP.feed_update(self.bot, Update(update_id=self.n, **event))
         return self.session.requests[start:]
 
-    async def send(self, text: str) -> list:
-        msg = Message(message_id=self.n + 1000, date=T0, chat=CHAT, from_user=USER, text=text)
+    async def send(self, text: str, user: User = USER) -> list:
+        chat = Chat(id=user.id, type="private")
+        msg = Message(message_id=self.n + 1000, date=T0, chat=chat, from_user=user, text=text)
         return await self._feed(message=msg)
 
-    async def press(self, data: str) -> list:
-        menu = Message(message_id=1, date=T0, chat=CHAT, text="…")
-        cb = CallbackQuery(id=str(self.n), from_user=USER, chat_instance="ci", data=data, message=menu)
+    async def press(self, data: str, user: User = USER, text: str = "…") -> list:
+        menu = Message(message_id=1, date=T0, chat=Chat(id=user.id, type="private"), text=text)
+        cb = CallbackQuery(id=str(self.n), from_user=user, chat_instance="ci", data=data, message=menu)
         return await self._feed(callback_query=cb)
 
 
-def texts_of(requests: list) -> list[str]:
-    return [r.text for r in requests if isinstance(r, (SendMessage, EditMessageText))]
+def texts_of(requests: list, chat_id: int | None = None) -> list[str]:
+    return [
+        r.text for r in requests
+        if isinstance(r, (SendMessage, EditMessageText)) and (chat_id is None or r.chat_id == chat_id)
+    ]
 
 
 def buttons_of(request) -> list[str]:
     return [b.callback_data for row in request.reply_markup.inline_keyboard for b in row]
+
+
+def toasts_of(requests: list) -> list[str | None]:
+    return [r.text for r in requests if isinstance(r, AnswerCallbackQuery)]
 
 
 def run(coro):
@@ -91,14 +115,14 @@ def run(coro):
 
 
 @pytest.fixture(autouse=True)
-def clean_state():
-    storage.reset()
-    DP.storage.storage.clear()   # сбросить шаги онбординга (FSM) от прошлого теста
+def fresh_db():
+    """Своя БД в памяти на каждый тест; состояние онбординга (FSM) — тоже с нуля."""
+    storage.reset()                      # db.configure("sqlite:///:memory:")
+    DP.storage.storage.clear()
     clock.freeze(T0)
     yield
     clock.unfreeze()
     notify.setup(None)
-    storage.reset()
 
 
 @pytest.fixture
@@ -107,31 +131,51 @@ def fake_ns(monkeypatch):
     raw = json.loads((DATA / "fast_drop.json").read_text())[:10]
     last_ms = max(e["date"] for e in raw)
 
-    def guard(url, token):
-        if url == "https://down.example":
-            raise nightscout.NsUnavailable("нет соединения")
-        if token != "good":
-            raise nightscout.NsBadToken()
+    def guard(ns: NightscoutClient) -> None:
+        if str(ns._http.base_url).rstrip("/") == "https://down.example":
+            raise NSUnavailable("нет соединения")
+        if ns._token != "good":
+            raise NSAuthError("HTTP 401")
 
-    async def check(url, token):
-        guard(url, token)
+    async def check(self):
+        guard(self)
 
-    async def get_server_time(url, token):
-        guard(url, token)
+    async def get_server_time(self):
+        guard(self)
         return last_ms + 3 * 60_000
 
-    async def get_entries(url, token, count=36):
-        guard(url, token)
+    async def get_entries(self, since=None, count=None):
+        guard(self)
         return sorted(raw, key=lambda e: -e["date"])[:count]
 
-    monkeypatch.setattr(nightscout, "check", check)
-    monkeypatch.setattr(nightscout, "get_server_time", get_server_time)
-    monkeypatch.setattr(nightscout, "get_entries", get_entries)
+    monkeypatch.setattr(NightscoutClient, "check", check)
+    monkeypatch.setattr(NightscoutClient, "get_server_time", get_server_time)
+    monkeypatch.setattr(NightscoutClient, "get_entries", get_entries)
     return datetime.fromtimestamp(last_ms / 1000, UTC)
 
 
-def connect(token: str | None = "good") -> None:
-    storage.save_user(storage.BotUser(USER.id, "https://my-cgm.example.com", token, "Europe/Moscow"))
+def connect(user: User = USER, token: str | None = "good") -> None:
+    storage.save_user(storage.BotUser(user.id, "https://my-cgm.example.com", token, "Europe/Moscow",
+                                      name=user.first_name))
+
+
+def owner_id() -> int:
+    return db.get_user_by_chat(USER.id).id
+
+
+def bind_trusted(friend: User = FRIEND, code: str = "code-1") -> None:
+    connect()
+    db.create_invite(owner_id(), code, T0)
+    db.accept_invite(code, friend.id, friend.first_name, T0)
+
+
+def add_alert(*, escalated: bool = False, message_id: int | None = None) -> int:
+    alert = Alert(Level.CRITICAL, AlertKind.VERY_LOW, T0, value=2.8, needs_ack=True,
+                  user_id=owner_id(), escalated_at=T0 if escalated else None)
+    db.save_alert(alert, sent_at=T0)
+    if message_id is not None:
+        db.mark_sent(alert.id, T0, message_id)
+    return alert.id
 
 
 # --- онбординг ---
@@ -149,13 +193,14 @@ def test_onboarding_happy_path(fake_ns):
         reqs = await tg.send("good")
         assert any(isinstance(r, DeleteMessage) for r in reqs), "сообщение с токеном удалено"
         assert texts_of(reqs) == [texts.ONBOARDING_CHECKING, texts.ONBOARDING_ASK_TZ]
-        assert "tz:Europe/Moscow" in buttons_of(reqs[-1])
+        assert "tz:Asia/Yekaterinburg" in buttons_of(reqs[-1])
 
-        assert "Часовой пояс: Москва (UTC+3)" in texts_of(await tg.press("tz:Europe/Moscow"))[0]
+        assert "Часовой пояс: Екатеринбург (UTC+5)" in texts_of(await tg.press("tz:Asia/Yekaterinburg"))[0]
 
     run(scenario())
     user = storage.get_user(USER.id)
-    assert (user.ns_url, user.ns_token, user.tz) == ("https://my-cgm.example.com", "good", "Europe/Moscow")
+    assert (user.ns_url, user.ns_token, user.tz, user.name) == (
+        "https://my-cgm.example.com", "good", "Asia/Yekaterinburg", "Аня")
 
 
 def test_onboarding_bad_url_bad_token_then_ok(fake_ns):
@@ -268,7 +313,144 @@ def test_forged_mode_buttons_change_nothing():
     assert storage.get_mode(USER.id).kind is Mode.NORMAL
 
 
-# --- notify и кнопки ---
+# --- /trusted ---
+
+def test_trusted_needs_connected_nightscout():
+    assert texts_of(run(Tg().send("/trusted"))) == [texts.NOW_NOT_CONNECTED]
+
+
+def test_trusted_invite_accept_and_off():
+    connect()
+
+    async def scenario():
+        tg = Tg()
+        invite = texts_of(await tg.send("/trusted"))[0]
+        assert "10 мин" in invite
+        link = re.search(rf"https://t\.me/{BOT_USERNAME}\?start=(invite_[\w-]+)", invite)
+        assert link, invite
+
+        reqs = await tg.send(f"/start {link.group(1)}", user=FRIEND)
+        assert texts_of(reqs, FRIEND.id)[0].startswith("Вы — доверенное лицо для пользователя Аня.")
+        assert buttons_of(reqs[0])[0].startswith("leave:")
+        assert texts_of(reqs, USER.id) == ["✅ Боря теперь ваше доверенное лицо."]
+
+        sent = texts_of(await tg.send("/trusted"))
+        assert sent[0] == "Доверенные лица: Боря.\nОтвязать всех — /trusted off"
+        assert "start=invite_" in sent[1], "можно пригласить ещё одного"
+        assert texts_of(await tg.send(f"/start {link.group(1)}", user=STRANGER)) == [texts.INVITE_NOT_FOUND]
+
+        reqs = await tg.send("/trusted off")
+        assert texts_of(reqs, USER.id) == ["Готово, доверенные лица отвязаны: Боря."]
+        assert texts_of(reqs, FRIEND.id) == ["Вы больше не доверенное лицо для пользователя Аня."]
+        assert texts_of(await tg.send("/trusted off")) == [texts.TRUSTED_NOTHING_TO_REMOVE]
+
+    run(scenario())
+    assert db.trusted_chat_ids(owner_id()) == []
+
+
+def test_own_link_does_not_burn_the_invite():
+    connect()
+    db.create_invite(owner_id(), "code-1", T0)
+    assert texts_of(run(Tg().send("/start invite_code-1"))) == [texts.INVITE_OWN]
+    reqs = run(Tg().send("/start invite_code-1", user=FRIEND))
+    assert texts_of(reqs, FRIEND.id)[0].startswith("Вы — доверенное лицо"), "ссылка осталась рабочей"
+
+
+def test_new_link_invalidates_old_and_several_trusted_allowed():
+    connect()
+
+    async def scenario():
+        tg = Tg()
+        old = re.search(r"start=(invite_[\w-]+)", texts_of(await tg.send("/trusted"))[0]).group(1)
+        new = re.search(r"start=(invite_[\w-]+)", texts_of(await tg.send("/trusted"))[0]).group(1)
+        assert texts_of(await tg.send(f"/start {old}", user=FRIEND)) == [texts.INVITE_NOT_FOUND]
+        await tg.send(f"/start {new}", user=FRIEND)
+        assert texts_of(await tg.send(f"/start {new}", user=FRIEND)) == [texts.INVITE_NOT_FOUND]
+        third = re.search(r"start=(invite_[\w-]+)", texts_of(await tg.send("/trusted"))[1]).group(1)
+        await tg.send(f"/start {third}", user=STRANGER)
+        assert texts_of(await tg.send("/trusted"))[0] == "Доверенные лица: Боря, Вася.\nОтвязать всех — /trusted off"
+
+    run(scenario())
+    assert sorted(db.trusted_chat_ids(owner_id())) == [FRIEND.id, STRANGER.id]
+
+
+def test_already_trusted_person_opens_new_link():
+    bind_trusted()
+    db.create_invite(owner_id(), "code-2", T0)
+    assert texts_of(run(Tg().send("/start invite_code-2", user=FRIEND))) == [
+        "Вы уже доверенное лицо для пользователя Аня."]
+
+
+def test_trusted_can_leave_by_button():
+    bind_trusted()
+    leave = f"leave:{owner_id()}"
+
+    async def scenario():
+        tg = Tg()
+        reqs = await tg.send("/trusted", user=FRIEND)          # у Бори нет своего Nightscout
+        assert texts_of(reqs) == ["Вы — доверенное лицо для: Аня."]
+        assert buttons_of(reqs[0]) == [leave]
+
+        reqs = await tg.press(leave, user=FRIEND)
+        assert texts_of(reqs, FRIEND.id) == ["Вы больше не доверенное лицо для пользователя Аня."]
+        assert texts_of(reqs, USER.id) == ["Боря больше не ваше доверенное лицо. Пригласить другого — /trusted"]
+        assert toasts_of(await tg.press(leave, user=FRIEND)) == [texts.TRUSTED_ALREADY_LEFT]
+
+    run(scenario())
+    assert db.trusted_chat_ids(owner_id()) == []
+
+
+# --- «Я в порядке» ---
+
+def test_ack_by_owner_dims_button_and_saves():
+    connect()
+    alert_id = add_alert()
+
+    async def scenario():
+        tg = Tg()
+        reqs = await tg.press(f"ack:{alert_id}", text="🔴 Очень низкий сахар")
+        assert toasts_of(reqs) == [texts.ACK_DONE]
+        edited = [r for r in reqs if isinstance(r, EditMessageText)]
+        assert edited[0].text == "🔴 Очень низкий сахар\n\n✅ Подтверждено в 15:00"   # 12:00 UTC = 15:00 МСК
+        assert edited[0].reply_markup is None, "кнопка погасла"
+        assert toasts_of(await tg.press(f"ack:{alert_id}")) == [texts.ACK_ALREADY]
+
+    run(scenario())
+    alert = db.get_alert(alert_id)
+    assert (alert.acked_at, alert.acked_by) == (T0, USER.id)
+
+
+def test_ack_by_trusted_notifies_owner_and_dims_owner_message():
+    bind_trusted()
+    alert_id = add_alert(escalated=True, message_id=555)
+
+    async def scenario():
+        reqs = await Tg().press(f"ack:{alert_id}", user=FRIEND)
+        assert toasts_of(reqs) == [texts.ACK_DONE]
+        assert texts_of(reqs, USER.id) == ["✅ Боря подтверждает: всё в порядке."]
+        dim = [r for r in reqs if isinstance(r, EditMessageReplyMarkup)]
+        assert (dim[0].chat_id, dim[0].message_id) == (USER.id, 555)
+
+    run(scenario())
+    assert db.get_alert(alert_id).acked_by == FRIEND.id
+
+
+def test_ack_by_owner_after_escalation_tells_trusted():
+    bind_trusted()
+    alert_id = add_alert(escalated=True)
+    reqs = run(Tg().press(f"ack:{alert_id}"))
+    assert texts_of(reqs, FRIEND.id) == ["✅ Аня на связи: нажата кнопка «Я в порядке»."]
+
+
+def test_ack_forbidden_for_strangers_and_unknown_alert():
+    connect()
+    alert_id = add_alert()
+    assert toasts_of(run(Tg().press(f"ack:{alert_id}", user=STRANGER))) == [texts.ACK_FORBIDDEN]
+    assert toasts_of(run(Tg().press("ack:9999"))) == [texts.ACK_NOT_FOUND]
+    assert db.get_alert(alert_id).acked_at is None
+
+
+# --- notify ---
 
 def test_notify_critical_has_ack_button_others_dont():
     async def scenario():
@@ -284,6 +466,115 @@ def test_notify_critical_has_ack_button_others_dont():
     assert important.text.startswith("🟠") and important.reply_markup is None
 
 
-def test_button_without_handler_gets_answer():
-    reqs = run(Tg().press("ack:7"))
-    assert [(type(r), r.text) for r in reqs] == [(AnswerCallbackQuery, texts.BUTTON_NOT_READY)]
+def test_notify_with_trusted_adds_hint_and_returns_message_id():
+    bind_trusted()
+    alert_id = add_alert()
+
+    async def scenario():
+        tg = Tg()
+        notify.setup(tg.bot)
+        alert = Alert(Level.CRITICAL, AlertKind.VERY_LOW, T0, 2.8, needs_ack=True, id=alert_id)
+        message_id = await notify.notify(alert, USER.id)
+        return tg.session.requests[0], message_id
+
+    sent, message_id = run(scenario())
+    assert sent.text.endswith("Если не ответите за 10 мин, я напишу доверенному лицу.")
+    assert message_id == 1, "pipeline сохраняет его через db.mark_sent"
+
+
+def test_notify_trusted_has_name_value_trend_minutes_and_button():
+    bind_trusted()
+    alert_id = add_alert()
+    db.save_readings(owner_id(), [Reading(T0, 2.8, "SingleDown")])
+
+    async def scenario():
+        tg = Tg()
+        notify.setup(tg.bot)
+        alert = db.get_alert(alert_id)                    # как в pipeline: из БД, с user_id
+        await notify.notify_trusted(alert, FRIEND.id, minutes_without_ack=12)
+        return tg.session.requests[0]
+
+    sent = run(scenario())
+    assert sent.chat_id == FRIEND.id
+    assert sent.text.startswith("🔴 <b>Аня не отвечает на уведомление уже 12 мин.</b>")
+    assert "Сахар: 2.8 ммоль/л ↓" in sent.text
+    button = sent.reply_markup.inline_keyboard[0][0]
+    assert (button.text, button.callback_data) == (texts.BUTTON_TRUSTED_OK, f"ack:{alert_id}")
+
+
+# --- /graph ---
+
+def test_graph_not_ready_without_plot(monkeypatch):
+    monkeypatch.setattr(graph, "load_plot", lambda: None)
+    assert texts_of(run(Tg().send("/graph"))) == [texts.GRAPH_NOT_READY]
+
+
+def test_graph_sends_picture_from_plot(monkeypatch, fake_ns):
+    calls = []
+
+    def fake_plot(readings, hours, tz):
+        calls.append((len(readings), hours, tz))
+        return b"\x89PNG fake"
+
+    monkeypatch.setattr(graph, "load_plot", lambda: fake_plot)
+    connect()
+    clock.freeze(fake_ns + timedelta(minutes=3))
+
+    async def scenario():
+        tg = Tg()
+        reqs = await tg.send("/graph")
+        photo = next(r for r in reqs if isinstance(r, SendPhoto))
+        assert photo.caption == "Сахар за 3 ч"
+        assert buttons_of(photo) == ["graph:3", "graph:6", "graph:24"]
+        await tg.press("graph:24")
+
+    run(scenario())
+    assert calls == [(10, 3, "Europe/Moscow"), (10, 24, "Europe/Moscow")]
+
+
+# --- стык с pipeline Dev 1 ---
+
+class FakeNS:
+    """Nightscout для pipeline: четыре показания по 2.8 ммоль/л (sgv 50) — очень низкий сахар."""
+
+    def __init__(self, url, token):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        pass
+
+    async def get_server_time(self):
+        return int(T0.timestamp() * 1000)
+
+    async def get_entries(self, since=None, count=None):
+        return [{"type": "sgv", "sgv": 50, "direction": "Flat",
+                 "date": int((T0 - timedelta(minutes=5 * i)).timestamp() * 1000)} for i in range(4)]
+
+
+def test_pipeline_sends_critical_with_button_and_saves_message_id(monkeypatch):
+    monkeypatch.setenv("CLOCK", "system")
+    clock.reset()
+    clock.freeze(T0)
+    connect()
+
+    async def scenario():
+        tg = Tg()
+        notify.setup(tg.bot)
+        user = db.get_user_by_chat(USER.id)
+        sent = await pipeline.process_user(user, db, FakeNS)
+        return tg.session.requests, sent
+
+    requests, sent = run(scenario())
+    critical = [a for a in sent if a.kind is AlertKind.VERY_LOW]
+    assert critical, sent
+    message = next(r for r in requests if isinstance(r, SendMessage) and "Очень низкий" in r.text)
+    assert buttons_of(message) == [f"ack:{critical[0].id}"]
+    assert db.alert_message_id(critical[0].id) == message_id_of(requests, message)
+
+
+def message_id_of(requests: list, request) -> int:
+    """FakeSession выдаёт message_id по порядку запросов (см. make_request)."""
+    return requests.index(request) + 1

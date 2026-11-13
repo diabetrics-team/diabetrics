@@ -15,6 +15,8 @@ from app.bot import texts
 from app.bot.formatting import format_duration
 from app.models import Mode
 
+GRAPH_HOURS = (3, 6, 24)
+
 
 class AckCb(CallbackData, prefix="ack"):
     """Кнопка «Я в порядке» — "ack:<id>", формат из заглушки notify.py каркаса."""
@@ -34,9 +36,18 @@ class OnboardingCb(CallbackData, prefix="onb"):
     action: str        # "no_token" | "restart"
 
 
-def ack_keyboard(alert_id: int) -> InlineKeyboardMarkup:
+class LeaveCb(CallbackData, prefix="leave"):
+    """Доверенное лицо отписывается от пользователя: его users.id (db.remove_trusted)."""
+    owner_id: int
+
+
+class GraphCb(CallbackData, prefix="graph"):
+    hours: int
+
+
+def ack_keyboard(alert_id: int, text: str = texts.BUTTON_OK) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text=texts.BUTTON_OK, callback_data=AckCb(alert_id=alert_id))
+    kb.button(text=text, callback_data=AckCb(alert_id=alert_id))
     return kb.as_markup()
 
 
@@ -73,4 +84,21 @@ def no_token_keyboard() -> InlineKeyboardMarkup:
 def reconnect_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text=texts.BUTTON_RECONNECT, callback_data=OnboardingCb(action="restart"))
+    return kb.as_markup()
+
+
+def leave_keyboard(owners: list[tuple[int, str]]) -> InlineKeyboardMarkup:
+    """owners — пары (users.id, имя пользователя, которого подстраховываем)."""
+    kb = InlineKeyboardBuilder()
+    for owner_id, name in owners:
+        kb.button(text=texts.BUTTON_LEAVE.format(name=name), callback_data=LeaveCb(owner_id=owner_id))
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def graph_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for hours in GRAPH_HOURS:
+        kb.button(text=f"{hours} ч", callback_data=GraphCb(hours=hours))
+    kb.adjust(len(GRAPH_HOURS))
     return kb.as_markup()
