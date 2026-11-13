@@ -14,7 +14,9 @@ import pytest
 pytest.importorskip("httpx")
 
 from app import clock, pipeline  # noqa: E402
-from app.models import Action, ActionType, Alert, AlertKind, Level, ModeState  # noqa: E402
+from app.alerts.antispam import EPISODE_KINDS  # noqa: E402
+from app.alerts.config import ALERT_COOLDOWN  # noqa: E402
+from app.models import Alert, AlertKind, Level, ModeState, Reading  # noqa: E402
 from app.ns.client import NSUnavailable  # noqa: E402
 
 DATA = Path(__file__).resolve().parent.parent / "fake_cgm" / "data"
@@ -62,6 +64,13 @@ class FakeRepo:
 
     def recent_alerts(self, uid, since):
         return [a for a in self.alerts if a.user_id == uid and a.created_at >= since]
+
+    def latest_episode_alerts(self, uid, now):
+        latest = {}
+        for a in sorted(self.alerts, key=lambda alert: alert.created_at):
+            if a.user_id == uid and a.created_at <= now and a.kind in EPISODE_KINDS:
+                latest[a.kind, a.level] = a
+        return list(latest.values())
 
     def save_alert(self, a, sent_at=None):
         a.id = len(self.alerts) + 1
@@ -176,7 +185,7 @@ def test_no_spam_while_low_persists(sent):
     repo, ns = FakeRepo([U(1, 111)]), FakeNS(entries)
     run_scenario(repo, ns, start_of(entries), 480)
     times = [t for _, k, _, t in sent["user"] if k is AlertKind.LOW]
-    assert all(b - a >= pipeline.DEDUP_WINDOW for a, b in zip(times, times[1:]))
+    assert times and all(b - a >= ALERT_COOLDOWN for a, b in zip(times, times[1:]))
 
 
 def test_normal_is_quiet(sent):
@@ -205,17 +214,7 @@ def test_bug_in_rules_does_not_crash_tick(sent, monkeypatch):
     asyncio.run(pipeline.tick(FakeRepo([U(1, 111)]), FakeNS(entries)))   # не падает
 
 
-def test_escalation_is_idempotent(sent, monkeypatch):
-    """escalation_step хоть каждый тик возвращает REPEAT и NOTIFY_TRUSTED —
-    повтор не чаще 5 мин, доверенному один раз."""
-    def always(open_alerts, now):
-        out = []
-        for a in open_alerts:
-            out += [Action(ActionType.REPEAT, a), Action(ActionType.NOTIFY_TRUSTED, a,
-                                                         {"minutes_without_ack": 10})]
-        return out
-
-    monkeypatch.setattr(pipeline, "escalation_step", always)
+def test_escalation_is_idempotent(sent):
     entries = raw("night_hypo")
     repo, ns = FakeRepo([U(1, 111)]), FakeNS(entries)
     repo.trusted[1] = [999]
@@ -225,8 +224,7 @@ def test_escalation_is_idempotent(sent, monkeypatch):
     assert sent["trusted"] == [(999, a.id, 10) for a in crit]
     for a in crit:
         times = [t for aid, t in sent["ids"] if aid == a.id]
-        assert len(times) >= 2, "должен быть хотя бы один повтор"
-        assert all(y - x >= pipeline.REPEAT_EVERY for x, y in zip(times, times[1:]))
+        assert times == [a.created_at, a.created_at + timedelta(minutes=5)]
 
 
 def test_open_critical_is_not_duplicated(sent):
@@ -237,12 +235,26 @@ def test_open_critical_is_not_duplicated(sent):
     assert len([a for a in repo.alerts if a.kind is AlertKind.VERY_LOW]) == 1
 
 
-def test_level_upgrade_passes_dedup():
-    t = datetime(2026, 11, 12, 3, 0, tzinfo=UTC)
-    important = Alert(Level.IMPORTANT, AlertKind.NO_DATA, t, 3.7)
-    critical = Alert(Level.CRITICAL, AlertKind.NO_DATA, t + timedelta(minutes=10), 3.7, True)
-    assert not pipeline._is_duplicate(critical, [important], t + timedelta(minutes=10))
-    assert pipeline._is_duplicate(important, [critical], t + timedelta(minutes=10))
+def test_long_outage_keeps_last_reading_past_history_window(sent):
+    entries = raw("sensor_lost")
+    repo, ns = FakeRepo([U(1, 111)]), FakeNS(entries)
+    last = datetime.fromtimestamp(max(e["date"] for e in entries) / 1000, UTC)
+    clock.freeze(last)
+    asyncio.run(pipeline.tick(repo, ns))
+    clock.freeze(last + timedelta(hours=3))
+    asyncio.run(pipeline.tick(repo, ns))
+    assert [a.level for a in repo.alerts if a.kind is AlertKind.NO_DATA] == [Level.IMPORTANT]
+
+
+def test_old_low_episode_does_not_restart_when_recent_window_expires(sent):
+    start = datetime(2026, 11, 12, 12, tzinfo=UTC)
+    repo = FakeRepo([U(1, 111)])
+    repo.save_alert(Alert(Level.IMPORTANT, AlertKind.LOW, start, 3.8, user_id=1), sent_at=start)
+    repo.readings[1] = [Reading(start + timedelta(minutes=5 * i), 3.8) for i in range(49)]
+    clock.freeze(repo.readings[1][-1].ts)
+    asyncio.run(pipeline.tick(repo, FakeNS([])))
+    assert len(repo.alerts) == 1
+    assert sent["user"] == []
 
 
 def test_server_clock_without_ns_skips_evaluate(sent, monkeypatch):

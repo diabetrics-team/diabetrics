@@ -35,6 +35,8 @@ from sqlalchemy import (
     create_engine,
     delete,
     event,
+    func,
+    or_,
     select,
     update,
 )
@@ -42,6 +44,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.types import TypeDecorator
 
+from app.alerts.antispam import EPISODE_KINDS
 from app.models import Alert, AlertKind, Level, Mode, ModeState, Reading
 
 UTC = timezone.utc
@@ -344,7 +347,8 @@ def get_alert(alert_id: int) -> Alert | None:
 def open_alerts(user_id: int | None = None) -> list[Alert]:
     """Критические без «Я в порядке». Читаются из БД — эскалация переживает перезапуск."""
     with _session() as s:
-        q = select(AlertRow).where(AlertRow.needs_ack.is_(True), AlertRow.acked_at.is_(None))
+        q = select(AlertRow).where(AlertRow.needs_ack.is_(True), AlertRow.acked_at.is_(None),
+                                   AlertRow.escalated_at.is_(None))
         if user_id is not None:
             q = q.where(AlertRow.user_id == user_id)
         return [_to_alert(r) for r in s.scalars(q.order_by(AlertRow.created_at))]
@@ -360,12 +364,35 @@ def recent_alerts(user_id: int, since: datetime) -> list[Alert]:
         return [_to_alert(r) for r in rows]
 
 
+def latest_episode_alerts(user_id: int, now: datetime) -> list[Alert]:
+    """Keep hysteresis and the last outage state past the recent-alert window."""
+    ranked = (
+        select(AlertRow.id, func.row_number().over(
+            partition_by=(AlertRow.kind, AlertRow.level),
+            order_by=(AlertRow.created_at.desc(), AlertRow.id.desc()),
+        ).label("position"))
+        .where(AlertRow.user_id == user_id, AlertRow.created_at <= now,
+               AlertRow.kind.in_([kind.value for kind in EPISODE_KINDS]))
+        .subquery()
+    )
+    with _session() as s:
+        rows = s.scalars(select(AlertRow).join(ranked, ranked.c.id == AlertRow.id).where(ranked.c.position == 1))
+        return [_to_alert(row) for row in rows]
+
+
 def mark_ack(alert_id: int, who: int, at: datetime) -> bool:
     """«Я в порядке». who — telegram id нажавшего. False — уже было подтверждено раньше."""
+    owner = select(User.id).where(User.id == AlertRow.user_id, User.chat_id == who).exists()
+    trusted = select(TrustedContact.id).where(
+        TrustedContact.user_id == AlertRow.user_id,
+        TrustedContact.chat_id == who,
+        TrustedContact.confirmed_at.is_not(None),
+    ).exists()
     with _session() as s, s.begin():
         result = s.execute(
             update(AlertRow)
-            .where(AlertRow.id == alert_id, AlertRow.acked_at.is_(None))
+            .where(AlertRow.id == alert_id, AlertRow.needs_ack.is_(True), AlertRow.acked_at.is_(None),
+                   or_(owner, trusted))
             .values(acked_at=at, acked_by=who)
         )
         return result.rowcount == 1
@@ -390,7 +417,7 @@ def mark_escalated(alert_id: int, at: datetime) -> bool:
     with _session() as s, s.begin():
         result = s.execute(
             update(AlertRow)
-            .where(AlertRow.id == alert_id, AlertRow.escalated_at.is_(None))
+            .where(AlertRow.id == alert_id, AlertRow.acked_at.is_(None), AlertRow.escalated_at.is_(None))
             .values(escalated_at=at)
         )
         return result.rowcount == 1

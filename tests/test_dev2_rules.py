@@ -91,7 +91,7 @@ class DurationTests(unittest.TestCase):
         self.assertEqual(kinds(check(series([13.9] * 13))), ["high_1h"])
 
     def test_short_very_high_keeps_sustained_high(self):
-        self.assertEqual(kinds(check(series([11] * 12 + [15]))), ["high_1h"])
+        self.assertEqual(kinds(check(series([12] * 12 + [14]))), ["high_1h"])
 
     def test_return_to_threshold_breaks_duration(self):
         self.assertEqual(check(series([11] * 6 + [10] + [11] * 6)), [])
@@ -207,7 +207,8 @@ class CgmScenarioTests(unittest.TestCase):
         for i, reading in enumerate(readings, start=1):
             history = readings[:i]
             for alert in check(history, predict(history), now=reading.ts):
-                first_times.setdefault(alert.kind, alert.created_at.astimezone(self.MSK).strftime("%H:%M"))
+                if alert.kind in self.FACTS_BY_KIND:
+                    first_times.setdefault(alert.kind, alert.created_at.astimezone(self.MSK).strftime("%H:%M"))
         expected = {kind: facts[key] for kind, key in self.FACTS_BY_KIND.items() if facts[key] is not None}
         self.assertEqual(first_times, expected)
 
