@@ -10,3 +10,9 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 110
 target-version = "py311"
+extend-exclude = ["fake_cgm"]
+
+[tool.ruff.lint]
+# Только то, что ловит ошибки: синтаксис, неопределённые имена, лишние импорты.
+# Стиль не навязываем — до сдачи день.
+select = ["E4", "E7", "E9", "F"]
