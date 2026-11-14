@@ -13,7 +13,7 @@ from html import escape
 from zoneinfo import ZoneInfo
 
 from app.bot import texts
-from app.models import Alert, Forecast, ModeState, Reading
+from app.models import Alert, AlertKind, Forecast, ModeState, Reading
 
 # Если последнее показание старше — прогноз не показываем: он построен по старым данным.
 STALE_AFTER = timedelta(minutes=15)
@@ -53,18 +53,27 @@ def format_alert(alert: Alert, tz: str | None = None) -> str:
     return head + texts.ALERTS[alert.kind].format(value=fmt_mmol(alert.value))
 
 
-def format_trusted_alert(alert: Alert, name: str | None, direction: str | None, minutes: int) -> str:
-    """Сообщение доверенному лицу: кто, сахар, тренд, сколько минут нет ответа."""
+def format_trusted_alert(
+    alert: Alert, name: str | None, direction: str | None, minutes: int, current: float | None = None,
+) -> str:
+    """Сообщение доверенному лицу: кто, о чём уведомление, сахар сейчас, тренд, сколько минут нет ответа.
+
+    current — последнее показание. Без него берётся alert.value, кроме прогноза: там это не сахар.
+    """
+    if current is None and alert.kind is not AlertKind.PREDICTED_LOW:
+        current = alert.value
+    reason = texts.ALERTS[alert.kind].format(value=fmt_mmol(alert.value)).split("\n")[0]
     return texts.TRUSTED_ALERT.format(
         name=escape(name) if name else texts.TRUSTED_SOMEONE,
-        value=fmt_mmol(alert.value),
+        reason=reason,
+        value=fmt_mmol(current),
         trend=texts.TREND_ARROWS.get(direction or "", ""),
         minutes=minutes,
     ).replace(" \n", "\n")   # без стрелки не оставлять пробел в конце строки
 
 
 def describe_mode(state: ModeState, now: datetime, scheduled: bool = False, tz: str | None = None) -> str:
-    """«🟢 Обычный», «🍽 После еды, ещё 1 ч 40 мин» или «🌙 Ночной по расписанию, до 07:00»."""
+    """«🔔 Обычный», «🍽 После еды, ещё 1 ч 40 мин» или «🌙 Ночной по расписанию, до 07:00»."""
     active = state.active(now)          # истёкший временный режим = NORMAL
     title = texts.MODES[active]["title"]
     if scheduled and state.until is not None:

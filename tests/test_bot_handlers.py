@@ -277,7 +277,7 @@ def test_now_connected(fake_ns):
     clock.freeze(fake_ns + timedelta(minutes=3))
     text = texts_of(run(Tg().send("/now")))[0]
     assert "ммоль/л</b>" in text and "3 мин назад" in text
-    assert "Через 20 мин" in text and "Режим: 🟢 Обычный" in text
+    assert "Через 20 мин" in text and "Режим: 🔔 Обычный" in text
 
 
 def test_now_bad_token(fake_ns):
@@ -291,7 +291,7 @@ def test_mode_after_meal_asks_duration_then_sets_until():
     async def scenario():
         tg = Tg()
         reqs = await tg.send("/mode")
-        assert texts_of(reqs)[0].startswith("Сейчас: 🟢 Обычный")
+        assert texts_of(reqs)[0].startswith("Сейчас: 🔔 Обычный")
         assert len(buttons_of(reqs[0])) == len(Mode)
 
         reqs = await tg.press("mode:after_meal:0")
@@ -511,7 +511,7 @@ def test_notify_trusted_has_name_value_trend_minutes_and_button():
     sent = run(scenario())
     assert sent.chat_id == FRIEND.id
     assert sent.text.startswith("🔴 <b>Аня не отвечает на уведомление уже 12 мин.</b>")
-    assert "Сахар: 2.8 ммоль/л ↓" in sent.text
+    assert "Сахар сейчас: 2.8 ммоль/л ↓" in sent.text
     button = sent.reply_markup.inline_keyboard[0][0]
     assert (button.text, button.callback_data) == (texts.BUTTON_TRUSTED_OK, f"ack:{alert_id}")
 
