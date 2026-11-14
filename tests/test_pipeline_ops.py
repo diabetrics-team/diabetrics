@@ -128,3 +128,32 @@ def test_health_updated_each_tick(outbox):
     before = pipeline.HEALTH.last_tick_mono
     tick_at(repo, ns, start_of(entries) + timedelta(hours=1))
     assert pipeline.HEALTH.users == 2 and pipeline.HEALTH.last_tick_mono != before
+
+
+def test_still_low_fires_under_night_schedule(outbox):
+    """Ночь по расписанию не должна съедать перепроверку «После коррекции гипо».
+
+    Пользователь получил low, нажал «Я в порядке», включил «После коррекции гипо» на 15 мин.
+    Сахар не поднялся → через 15 мин должно прийти критическое still_low, даже ночью.
+    """
+    from app.models import Mode, ModeState
+
+    entries = raw("hypo_not_corrected")                   # low в 12:35 МСК, остаётся ниже 3.9
+    user = U(1, 111)
+    user.night_start, user.night_end, user.tz = "12:00", "14:00", "Europe/Moscow"
+    repo = Repo([user])
+    state = {"mode": ModeState()}
+    repo.get_mode = lambda uid: state["mode"]
+    ns = FakeNS(entries)
+    start = start_of(entries)
+    for m in range(0, 121):
+        now = start + timedelta(minutes=m)
+        tick_at(repo, ns, now)
+        low = next((a for a in repo.alerts if a.kind is AlertKind.LOW), None)
+        if low is not None and state["mode"].kind is not Mode.AFTER_HYPO and now >= low.created_at + timedelta(minutes=5):
+            for a in repo.alerts:                         # «Я в порядке» на всё открытое
+                if a.needs_ack and a.acked_at is None:
+                    a.acked_at, a.acked_by = now, 111
+            state["mode"] = ModeState(Mode.AFTER_HYPO, until=now + timedelta(minutes=15))
+    still = [a for a in repo.alerts if a.kind is AlertKind.STILL_LOW]
+    assert len(still) == 1 and still[0].level is Level.CRITICAL and still[0].needs_ack
