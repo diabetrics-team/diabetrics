@@ -106,7 +106,13 @@ class ReadingRow(Base):
 
 class AlertRow(Base):
     __tablename__ = "alerts"
-    __table_args__ = (Index("ix_alerts_user_created", "user_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_alerts_user_created", "user_id", "created_at"),
+        # id не переиспользуются после удаления строк. Иначе кнопка «Я в порядке» под старым
+        # сообщением или старая запись о доставке доверенному попали бы на новое уведомление
+        # с тем же id (так было после очистки базы между прогонами демо).
+        {"sqlite_autoincrement": True},
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
@@ -235,9 +241,25 @@ def upsert_user(chat_id: int, now: datetime, **fields: object) -> User:
         if user is None:
             user = User(chat_id=chat_id, created_at=now)
             s.add(user)
+        elif "ns_url" in fields and user.ns_url is not None and fields["ns_url"] != user.ns_url:
+            _forget_source_data(s, user.id)
         for key, value in fields.items():
             setattr(user, key, value)
     return user
+
+
+def _forget_source_data(s: Session, user_id: int) -> None:
+    """Пользователь подключил другой Nightscout: показания и уведомления старого источника
+    к новому не относятся. Если их оставить, pipeline запрашивает данные «новее последнего
+    показания» старого источника и может долго не видеть новый; открытые тревоги по старым
+    данным продолжали бы эскалироваться. Режим, настройки и доверенные лица остаются."""
+    no_sync = {"synchronize_session": False}
+    alert_ids = select(AlertRow.id).where(AlertRow.user_id == user_id)
+    s.execute(delete(TrustedDelivery).where(TrustedDelivery.alert_id.in_(alert_ids)),
+              execution_options=no_sync)
+    s.execute(delete(AlertRow).where(AlertRow.user_id == user_id), execution_options=no_sync)
+    s.execute(delete(ReadingRow).where(ReadingRow.user_id == user_id), execution_options=no_sync)
+    log.info("user_id=%s подключил другой Nightscout — старые показания и уведомления удалены", user_id)
 
 
 def active_users() -> list[User]:

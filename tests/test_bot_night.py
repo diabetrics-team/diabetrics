@@ -73,3 +73,14 @@ def test_escalation_options_are_valid_for_dev2():
     for minutes in ESCALATION_OPTIONS:
         assert timedelta(minutes=minutes) > REPEAT_AFTER
         escalation_step([], utc(12, 0), trusted_after_minutes=minutes)
+
+
+def test_expired_after_hypo_is_kept_for_recheck_at_night():
+    """Ночью истёкший «После коррекции гипо» не подменяется «Ночным», пока движок не перепроверил сахар."""
+    until = utc(23, 30)                                   # 02:30 МСК — ночь по расписанию
+    state = ModeState(Mode.AFTER_HYPO, until=until)
+    assert effective_mode(state, U(), until - timedelta(minutes=1)) is state      # ещё действует
+    assert effective_mode(state, U(), until) is state                             # момент перепроверки
+    assert effective_mode(state, U(), until + timedelta(minutes=14)) is state
+    later = effective_mode(state, U(), until + timedelta(minutes=15))             # окно прошло
+    assert later.kind is Mode.NIGHT

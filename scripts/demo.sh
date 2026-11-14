@@ -5,9 +5,10 @@
 #   scripts/demo.sh noise_spike 30 50   # сценарий, скорость, пропуск (мин)
 #
 # Что делает:
-#   1. пересоздаёт fake-NS с новым сценарием (свежие данные и время);
+#   1. останавливает fake-NS;
 #   2. чистит из базы показания, уведомления и режимы прошлого прогона.
-#      Пользователи, подключение к Nightscout и доверенные лица остаются.
+#      Пользователи, подключение к Nightscout и доверенные лица остаются;
+#   3. запускает fake-NS с новым сценарием (свежие данные и время).
 # Режим (например, «Ночной») после переключения включите в боте: /mode.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -27,9 +28,9 @@ case "$SCENARIO" in
 esac
 SKIP="${3:-$DEFAULT_SKIP}"
 
-echo "→ fake-NS: $SCENARIO, ×$SPEED, с $SKIP-й минуты"
-SCENARIO="$SCENARIO" SPEED="$SPEED" SKIP="$SKIP" \
-  docker compose --profile demo up -d --force-recreate fake-ns
+# Порядок важен: сначала остановить fake-NS, потом чистить базу, потом запускать новый сценарий.
+# Иначе pipeline успевает смешать показания старого и нового сценария и прислать лишнее уведомление.
+docker compose --profile demo stop fake-ns >/dev/null 2>&1 || true
 
 # База — внутри контейнера бота: файл в ./data создаёт root, с хоста его не изменить.
 docker compose exec -T bot python - <<'PY' || echo "!! бот не запущен: docker compose --profile demo up -d"
@@ -40,12 +41,20 @@ if not os.path.exists(path):
     print("→ базы ещё нет — пройдите /start в боте (адрес http://fake-ns:1337, токен secret)")
 else:
     con = sqlite3.connect(path, timeout=10)
-    for table in ("readings", "alerts", "modes"):
-        con.execute(f"DELETE FROM {table}")
+    tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    # trusted_deliveries — вместе с alerts: иначе записи «доверенному уже доставлено» от прошлого
+    # прогона остались бы в базе, и во втором прогоне доверенное лицо могло не получить сообщение.
+    for table in ("trusted_deliveries", "readings", "alerts", "modes"):
+        if table in tables:
+            con.execute(f"DELETE FROM {table}")
     con.commit()
     users = con.execute("SELECT COUNT(*) FROM users WHERE ns_url IS NOT NULL").fetchone()[0]
     print(f"→ база очищена: показания, уведомления, режимы. Пользователей с Nightscout: {users}")
 PY
+
+echo "→ fake-NS: $SCENARIO, ×$SPEED, с $SKIP-й минуты"
+SCENARIO="$SCENARIO" SPEED="$SPEED" SKIP="$SKIP" \
+  docker compose --profile demo up -d --force-recreate fake-ns
 
 sleep 2
 curl -s "http://localhost:1337/api/v1/status.json?token=${FAKE_NS_TOKEN:-secret}" \
