@@ -47,6 +47,7 @@ from app.ns.clean import clean
 log = logging.getLogger(__name__)
 
 HISTORY = timedelta(hours=2)          # сколько истории отдаём predict/evaluate
+ESCALATION_HISTORY = timedelta(days=1)  # окно поиска эскалаций и восстановления
 RECENT = timedelta(hours=1)           # recent_alerts для антиспама
 FIRST_FETCH_COUNT = 36                # первый опрос нового пользователя: ~3 ч при шаге 5 мин
 NS_DOWN_ALERT_AFTER = timedelta(minutes=10)   # watchdog: столько без связи → ns_unreachable
@@ -214,12 +215,13 @@ async def _escalate(user: Any, repo: Any, now: datetime) -> None:
     low_episode_escalated = False
     if any(a.kind in LOW_ESCALATION_KINDS for a in open_alerts):
         low_history = [
-            a for a in repo.recent_alerts(user.id, datetime.min.replace(tzinfo=UTC))
+            a for a in repo.recent_alerts(user.id, now - ESCALATION_HISTORY)
             if a.kind in LOW_ESCALATION_KINDS and a.created_at <= now
+            and a.acked_at is None
             and (a.escalated_at is not None or a in open_alerts)
         ]
         if low_history:
-            since = min(a.created_at for a in low_history) - HISTORY
+            since = max(now - ESCALATION_HISTORY, min(a.created_at for a in low_history) - HISTORY)
             low_recovered_at = last_low_recovery(repo.readings_since(user.id, since), now)
             low_episode_escalated = any(
                 a.escalated_at is not None and a.escalated_at <= now
@@ -329,7 +331,7 @@ async def replay(scenario: str, mode: ModeState | None = None, chat_id: int = 0)
         open_alerts = [a for a in sent if a.needs_ack and a.acked_at is None]
         recovered_at = last_low_recovery(history, now)
         episode_escalated = any(
-            a.kind in LOW_ESCALATION_KINDS and a.escalated_at is not None
+            a.kind in LOW_ESCALATION_KINDS and a.escalated_at is not None and a.acked_at is None
             and (recovered_at is None or a.created_at > recovered_at)
             for a in sent
         )

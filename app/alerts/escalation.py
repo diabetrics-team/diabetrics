@@ -1,4 +1,5 @@
 """Escalation decisions and confirmation for critical alerts."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Collection, Sequence
@@ -8,7 +9,6 @@ from app import clock
 from app.models import Action, ActionType, Alert, AlertKind, Level
 
 from .config import REPEAT_AFTER, TRUSTED_AFTER_MINUTES
-
 
 LOW_ESCALATION_KINDS = frozenset({AlertKind.LOW, AlertKind.VERY_LOW, AlertKind.STILL_LOW})
 
