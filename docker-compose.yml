@@ -20,6 +20,8 @@ services:
   fake-ns:
     image: python:3.11-slim
     profiles: ["demo"]
+    environment:
+      PYTHONUNBUFFERED: "1"     # иначе вывод fake-NS теряется и docker compose logs пустой
     volumes:
       - ./fake_cgm:/fake:ro
     command: >
