@@ -7,20 +7,20 @@
 | Сценарий · режим | Итог | Уведомления (новые) | Доверенному |
 |---|---|---|---|
 | normal · normal | ✅ | 15:20 important/no_data, 15:35 important/no_data, 15:50 important/no_data | — |
-| night_hypo · normal | ✅ | 01:45 critical/predicted_low, 01:50 important/low, 02:20 critical/predicted_low, 02:50 critical/predicted_low, 03:00 critical/very_low, 03:05 critical/predicted_low … | 01:55 |
-| night_hypo · night | ✅ | 01:45 critical/predicted_low, 01:50 critical/low, 02:20 critical/predicted_low, 02:50 critical/predicted_low, 03:00 critical/very_low, 03:05 critical/predicted_low … | 01:55 |
-| night_hypo · normal + ночь по расписанию 23:00–07:00 | ✅ | 01:45 critical/predicted_low, 01:50 critical/low, 02:20 critical/predicted_low, 02:50 critical/predicted_low, 03:00 critical/very_low, 03:05 critical/predicted_low … | 01:55 |
+| night_hypo · normal | ✅ | 01:45 critical/predicted_low, 01:50 important/low, 02:20 critical/predicted_low, 02:50 critical/predicted_low, 03:00 critical/very_low, 03:05 critical/predicted_low … | 03:10 |
+| night_hypo · night | ✅ | 01:45 critical/predicted_low, 01:50 critical/low, 02:20 critical/predicted_low, 02:50 critical/predicted_low, 03:00 critical/very_low, 03:05 critical/predicted_low … | 02:00 |
+| night_hypo · normal + ночь по расписанию 23:00–07:00 | ✅ | 01:45 critical/predicted_low, 01:50 critical/low, 02:20 critical/predicted_low, 02:50 critical/predicted_low, 03:00 critical/very_low, 03:05 critical/predicted_low … | 02:00 |
 | meal · normal | ✅ | 08:30 important/fast_rise, 09:40 important/high_1h, 10:25 info/back_in_range, 12:20 important/no_data, 12:35 important/no_data, 12:50 important/no_data | — |
 | meal · after_meal | ✅ | 12:20 important/no_data, 12:35 important/no_data, 12:50 important/no_data | — |
-| fast_drop · normal | ✅ | 16:45 important/fast_drop, 16:45 critical/predicted_low, 16:55 important/low, 17:00 critical/predicted_low, 17:15 info/back_in_range, 18:20 important/no_data … | 16:55 |
-| hypo_corrected · after_hypo | ✅ | 12:20 critical/predicted_low, 12:35 important/low, 12:35 critical/predicted_low, 13:00 info/back_in_range, 14:20 important/no_data, 14:35 important/no_data … | 12:30 |
-| hypo_not_corrected · after_hypo | ✅ | 12:20 critical/predicted_low, 12:35 important/low, 12:35 critical/predicted_low, 12:55 critical/still_low, 13:55 info/back_in_range, 14:20 important/no_data … | 12:30 |
+| fast_drop · normal | ✅ | 16:45 important/fast_drop, 16:45 critical/predicted_low, 16:55 important/low, 17:00 critical/predicted_low, 17:15 info/back_in_range, 18:20 important/no_data … | — |
+| hypo_corrected · after_hypo | ✅ | 12:20 critical/predicted_low, 12:35 important/low, 12:35 critical/predicted_low, 13:00 info/back_in_range, 14:20 important/no_data, 14:35 important/no_data … | — |
+| hypo_not_corrected · after_hypo | ✅ | 12:20 critical/predicted_low, 12:35 important/low, 12:35 critical/predicted_low, 12:55 critical/still_low, 13:55 info/back_in_range, 14:20 important/no_data … | 13:05 |
 | hyper_long · normal | ✅ | 15:30 important/high_1h, 16:20 critical/very_high_1h, 17:55 info/back_in_range, 18:30 important/no_data, 18:45 important/no_data, 19:00 important/no_data | 16:30 |
-| sensor_gap · normal | ✅ | 18:25 critical/predicted_low, 18:45 important/low, 18:45 critical/predicted_low, 19:00 critical/predicted_low, 19:10 important/no_data, 19:20 critical/no_data … | 18:35 |
+| sensor_gap · normal | ✅ | 18:25 critical/predicted_low, 18:45 important/low, 18:45 critical/predicted_low, 19:00 critical/predicted_low, 19:10 important/no_data, 19:20 critical/no_data … | 19:30 |
 | noise_spike · normal | ✅ | 13:50 important/no_data, 14:05 important/no_data, 14:20 important/no_data | — |
-| borderline · normal | ✅ | 15:25 critical/predicted_low, 15:35 important/low, 16:30 info/back_in_range, 17:20 important/no_data, 17:35 important/no_data, 17:50 important/no_data | 15:35 |
-| meal_overbolus · normal | ✅ | 13:40 important/fast_rise, 14:40 important/high_1h, 14:50 info/back_in_range, 15:20 important/predicted_low, 15:25 critical/predicted_low, 15:40 important/low … | 15:35 |
-| meal_overbolus · after_meal | ✅ | 15:20 important/predicted_low, 15:25 critical/predicted_low, 15:40 important/low, 15:40 critical/predicted_low, 16:20 info/back_in_range, 17:30 important/no_data … | 15:35 |
+| borderline · normal | ✅ | 15:25 critical/predicted_low, 15:35 important/low, 16:30 info/back_in_range, 17:20 important/no_data, 17:35 important/no_data, 17:50 important/no_data | — |
+| meal_overbolus · normal | ✅ | 13:40 important/fast_rise, 14:40 important/high_1h, 14:50 info/back_in_range, 15:20 important/predicted_low, 15:25 critical/predicted_low, 15:40 important/low … | — |
+| meal_overbolus · after_meal | ✅ | 15:20 important/predicted_low, 15:25 critical/predicted_low, 15:40 important/low, 15:40 critical/predicted_low, 16:20 info/back_in_range, 17:30 important/no_data … | — |
 | sensor_lost · normal | ✅ | 21:20 important/no_data, 21:35 important/no_data, 21:50 important/no_data | — |
 | dirty_data · normal | ✅ | 14:20 important/no_data, 14:35 important/no_data, 14:50 important/no_data | — |
 | random_day · normal | ✅ | 13:30 important/fast_rise, 14:35 important/high_1h, 15:25 info/back_in_range, 00:20 important/no_data, 00:35 important/no_data, 00:50 important/no_data | — |
@@ -48,32 +48,20 @@
 - ✅ important low в 01:50
 - ✅ critical very_low в 03:00
 - ✅ critical predicted_low в 01:45
-- ✅ доверенному лицу — в 01:55
+- ✅ доверенному лицу — в 03:10
 
 | Время | Уровень | Вид | Значение | Кому |
 |---|---|---|---|---|
 | 01:45 | critical | predicted_low | 3.0 | пользователю |
 | 01:50 | important | low | 3.9 | пользователю |
-| 01:50 | critical | predicted_low | 3.0 | пользователю |
-| 01:55 | critical | predicted_low | 3.0 | доверенному |
 | 02:20 | critical | predicted_low | 3.0 | пользователю |
-| 02:25 | critical | predicted_low | 3.0 | пользователю |
-| 02:30 | critical | predicted_low | 3.0 | доверенному |
 | 02:50 | critical | predicted_low | 2.8 | пользователю |
-| 02:55 | critical | predicted_low | 2.8 | пользователю |
 | 03:00 | critical | very_low | 2.9 | пользователю |
-| 03:00 | critical | predicted_low | 2.8 | доверенному |
 | 03:05 | critical | predicted_low | 2.4 | пользователю |
 | 03:05 | critical | very_low | 2.9 | пользователю |
 | 03:10 | critical | very_low | 2.9 | доверенному |
-| 03:10 | critical | predicted_low | 2.4 | пользователю |
-| 03:15 | critical | predicted_low | 2.4 | доверенному |
 | 03:20 | critical | predicted_low | 2.6 | пользователю |
-| 03:25 | critical | predicted_low | 2.6 | пользователю |
-| 03:30 | critical | predicted_low | 2.6 | доверенному |
 | 03:35 | critical | predicted_low | 2.4 | пользователю |
-| 03:40 | critical | predicted_low | 2.4 | пользователю |
-| 03:45 | critical | predicted_low | 2.4 | доверенному |
 | 04:20 | info | back_in_range | 4.3 | пользователю |
 | 07:20 | important | no_data | 6.5 | пользователю |
 | 07:35 | important | no_data | 6.5 | пользователю |
@@ -85,34 +73,21 @@
 
 - ✅ critical low в 01:50
 - ✅ нет important low
-- ✅ доверенному лицу — в 01:55
+- ✅ доверенному лицу — в 02:00
 
 | Время | Уровень | Вид | Значение | Кому |
 |---|---|---|---|---|
 | 01:45 | critical | predicted_low | 3.0 | пользователю |
 | 01:50 | critical | low | 3.9 | пользователю |
-| 01:50 | critical | predicted_low | 3.0 | пользователю |
-| 01:55 | critical | predicted_low | 3.0 | доверенному |
 | 01:55 | critical | low | 3.9 | пользователю |
 | 02:00 | critical | low | 3.9 | доверенному |
 | 02:20 | critical | predicted_low | 3.0 | пользователю |
-| 02:25 | critical | predicted_low | 3.0 | пользователю |
-| 02:30 | critical | predicted_low | 3.0 | доверенному |
 | 02:50 | critical | predicted_low | 2.8 | пользователю |
-| 02:55 | critical | predicted_low | 2.8 | пользователю |
 | 03:00 | critical | very_low | 2.9 | пользователю |
-| 03:00 | critical | predicted_low | 2.8 | доверенному |
 | 03:05 | critical | predicted_low | 2.4 | пользователю |
 | 03:05 | critical | very_low | 2.9 | пользователю |
-| 03:10 | critical | very_low | 2.9 | доверенному |
-| 03:10 | critical | predicted_low | 2.4 | пользователю |
-| 03:15 | critical | predicted_low | 2.4 | доверенному |
 | 03:20 | critical | predicted_low | 2.6 | пользователю |
-| 03:25 | critical | predicted_low | 2.6 | пользователю |
-| 03:30 | critical | predicted_low | 2.6 | доверенному |
 | 03:35 | critical | predicted_low | 2.4 | пользователю |
-| 03:40 | critical | predicted_low | 2.4 | пользователю |
-| 03:45 | critical | predicted_low | 2.4 | доверенному |
 | 04:20 | info | back_in_range | 4.3 | пользователю |
 | 07:20 | important | no_data | 6.5 | пользователю |
 | 07:35 | important | no_data | 6.5 | пользователю |
@@ -129,28 +104,15 @@
 |---|---|---|---|---|
 | 01:45 | critical | predicted_low | 3.0 | пользователю |
 | 01:50 | critical | low | 3.9 | пользователю |
-| 01:50 | critical | predicted_low | 3.0 | пользователю |
-| 01:55 | critical | predicted_low | 3.0 | доверенному |
 | 01:55 | critical | low | 3.9 | пользователю |
 | 02:00 | critical | low | 3.9 | доверенному |
 | 02:20 | critical | predicted_low | 3.0 | пользователю |
-| 02:25 | critical | predicted_low | 3.0 | пользователю |
-| 02:30 | critical | predicted_low | 3.0 | доверенному |
 | 02:50 | critical | predicted_low | 2.8 | пользователю |
-| 02:55 | critical | predicted_low | 2.8 | пользователю |
 | 03:00 | critical | very_low | 2.9 | пользователю |
-| 03:00 | critical | predicted_low | 2.8 | доверенному |
 | 03:05 | critical | predicted_low | 2.4 | пользователю |
 | 03:05 | critical | very_low | 2.9 | пользователю |
-| 03:10 | critical | very_low | 2.9 | доверенному |
-| 03:10 | critical | predicted_low | 2.4 | пользователю |
-| 03:15 | critical | predicted_low | 2.4 | доверенному |
 | 03:20 | critical | predicted_low | 2.6 | пользователю |
-| 03:25 | critical | predicted_low | 2.6 | пользователю |
-| 03:30 | critical | predicted_low | 2.6 | доверенному |
 | 03:35 | critical | predicted_low | 2.4 | пользователю |
-| 03:40 | critical | predicted_low | 2.4 | пользователю |
-| 03:45 | critical | predicted_low | 2.4 | доверенному |
 | 04:20 | info | back_in_range | 4.3 | пользователю |
 | 07:20 | important | no_data | 6.5 | пользователю |
 | 07:35 | important | no_data | 6.5 | пользователю |
@@ -196,12 +158,8 @@
 |---|---|---|---|---|
 | 16:45 | important | fast_drop | 4.8 | пользователю |
 | 16:45 | critical | predicted_low | 0.8 | пользователю |
-| 16:50 | critical | predicted_low | 0.8 | пользователю |
 | 16:55 | important | low | 3.9 | пользователю |
-| 16:55 | critical | predicted_low | 0.8 | доверенному |
 | 17:00 | critical | predicted_low | 2.3 | пользователю |
-| 17:05 | critical | predicted_low | 2.3 | пользователю |
-| 17:10 | critical | predicted_low | 2.3 | доверенному |
 | 17:15 | info | back_in_range | 4.4 | пользователю |
 | 18:20 | important | no_data | 5.9 | пользователю |
 | 18:35 | important | no_data | 5.9 | пользователю |
@@ -217,12 +175,8 @@
 | Время | Уровень | Вид | Значение | Кому |
 |---|---|---|---|---|
 | 12:20 | critical | predicted_low | 2.8 | пользователю |
-| 12:25 | critical | predicted_low | 2.8 | пользователю |
-| 12:30 | critical | predicted_low | 2.8 | доверенному |
 | 12:35 | important | low | 3.5 | пользователю |
 | 12:35 | critical | predicted_low | 2.4 | пользователю |
-| 12:40 | critical | predicted_low | 2.4 | пользователю |
-| 12:45 | critical | predicted_low | 2.4 | доверенному |
 | 13:00 | info | back_in_range | 4.9 | пользователю |
 | 14:20 | important | no_data | 6.3 | пользователю |
 | 14:35 | important | no_data | 6.3 | пользователю |
@@ -238,12 +192,8 @@
 | Время | Уровень | Вид | Значение | Кому |
 |---|---|---|---|---|
 | 12:20 | critical | predicted_low | 2.8 | пользователю |
-| 12:25 | critical | predicted_low | 2.8 | пользователю |
-| 12:30 | critical | predicted_low | 2.8 | доверенному |
 | 12:35 | important | low | 3.6 | пользователю |
 | 12:35 | critical | predicted_low | 2.5 | пользователю |
-| 12:40 | critical | predicted_low | 2.5 | пользователю |
-| 12:45 | critical | predicted_low | 2.5 | доверенному |
 | 12:55 | critical | still_low | 3.6 | пользователю |
 | 13:00 | critical | still_low | 3.6 | пользователю |
 | 13:05 | critical | still_low | 3.6 | доверенному |
@@ -281,16 +231,10 @@
 | Время | Уровень | Вид | Значение | Кому |
 |---|---|---|---|---|
 | 18:25 | critical | predicted_low | 2.9 | пользователю |
-| 18:30 | critical | predicted_low | 2.9 | пользователю |
-| 18:35 | critical | predicted_low | 2.9 | доверенному |
 | 18:45 | important | low | 3.8 | пользователю |
 | 18:45 | critical | predicted_low | 2.6 | пользователю |
-| 18:50 | critical | predicted_low | 2.6 | пользователю |
-| 18:55 | critical | predicted_low | 2.6 | доверенному |
 | 19:00 | critical | predicted_low | 2.6 | пользователю |
-| 19:05 | critical | predicted_low | 2.6 | пользователю |
 | 19:10 | important | no_data | 3.7 | пользователю |
-| 19:10 | critical | predicted_low | 2.6 | доверенному |
 | 19:20 | critical | no_data | 3.7 | пользователю |
 | 19:25 | critical | no_data | 3.7 | пользователю |
 | 19:30 | critical | no_data | 3.7 | доверенному |
@@ -321,9 +265,7 @@
 | Время | Уровень | Вид | Значение | Кому |
 |---|---|---|---|---|
 | 15:25 | critical | predicted_low | 2.6 | пользователю |
-| 15:30 | critical | predicted_low | 2.6 | пользователю |
 | 15:35 | important | low | 3.8 | пользователю |
-| 15:35 | critical | predicted_low | 2.6 | доверенному |
 | 16:30 | info | back_in_range | 4.3 | пользователю |
 | 17:20 | important | no_data | 5.2 | пользователю |
 | 17:35 | important | no_data | 5.2 | пользователю |
@@ -345,12 +287,8 @@
 | 14:50 | info | back_in_range | 9.4 | пользователю |
 | 15:20 | important | predicted_low | 3.0 | пользователю |
 | 15:25 | critical | predicted_low | 2.2 | пользователю |
-| 15:30 | critical | predicted_low | 2.2 | пользователю |
-| 15:35 | critical | predicted_low | 2.2 | доверенному |
 | 15:40 | important | low | 3.4 | пользователю |
 | 15:40 | critical | predicted_low | 1.4 | пользователю |
-| 15:45 | critical | predicted_low | 1.4 | пользователю |
-| 15:50 | critical | predicted_low | 1.4 | доверенному |
 | 16:20 | info | back_in_range | 4.4 | пользователю |
 | 17:30 | important | no_data | 5.9 | пользователю |
 | 17:45 | important | no_data | 5.9 | пользователю |
@@ -368,12 +306,8 @@
 |---|---|---|---|---|
 | 15:20 | important | predicted_low | 3.0 | пользователю |
 | 15:25 | critical | predicted_low | 2.2 | пользователю |
-| 15:30 | critical | predicted_low | 2.2 | пользователю |
-| 15:35 | critical | predicted_low | 2.2 | доверенному |
 | 15:40 | important | low | 3.4 | пользователю |
 | 15:40 | critical | predicted_low | 1.4 | пользователю |
-| 15:45 | critical | predicted_low | 1.4 | пользователю |
-| 15:50 | critical | predicted_low | 1.4 | доверенному |
 | 16:20 | info | back_in_range | 4.4 | пользователю |
 | 17:30 | important | no_data | 5.9 | пользователю |
 | 17:45 | important | no_data | 5.9 | пользователю |
