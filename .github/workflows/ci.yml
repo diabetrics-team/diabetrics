@@ -33,3 +33,14 @@ jobs:
 
       - name: Pytest
         run: pytest -q -rs
+
+      - name: Сценарии fake_cgm через pipeline
+        run: python scripts/run_scenarios.py --md scenarios-report.md
+
+      - name: Отчёт по сценариям
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenarios-report
+          path: scenarios-report.md
+          if-no-files-found: ignore
