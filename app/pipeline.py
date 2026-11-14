@@ -49,6 +49,7 @@ HISTORY = timedelta(hours=2)          # сколько истории отдаё
 RECENT = timedelta(hours=1)           # recent_alerts для антиспама
 FIRST_FETCH_COUNT = 36                # первый опрос нового пользователя: ~3 ч при шаге 5 мин
 NS_DOWN_ALERT_AFTER = timedelta(minutes=10)   # watchdog: столько без связи → ns_unreachable
+TRUSTED_MAX_ATTEMPTS = 10   # попыток доставки доверенному на тревогу (одна на тик)
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "fake_cgm" / "data"
 
@@ -217,22 +218,59 @@ async def _escalate(user: Any, repo: Any, now: datetime) -> None:
             message_id = await _send(user, repo, alert, repeat=True)
             repo.mark_sent(alert.id, now, message_id)
         elif action.type is ActionType.NOTIFY_TRUSTED:
-            if not repo.mark_escalated(alert.id, now):      # уже отправляли
-                continue
             minutes = action.extra.get(
                 "minutes_without_ack", int((now - alert.created_at).total_seconds() // 60)
             )
-            chats = repo.trusted_chat_ids(user.id)
-            if not chats:
-                log.warning("pipeline: эскалация alert_id=%s, но доверенного лица нет", alert.id)
-            for chat_id in chats:
-                try:
-                    await notify_trusted(alert, chat_id, minutes)
-                except Exception:
-                    log.exception("escalation alert_id=%s → chat %s: не отправлено", alert.id, chat_id)
-                    continue
-                log.info("escalation alert_id=%s user_id=%s → доверенному chat %s, без ответа %s мин",
-                         alert.id, user.id, chat_id, minutes)
+            await _notify_trusted_all(user, repo, alert, minutes, now)
+
+
+async def _notify_trusted_all(user: Any, repo: Any, alert: Alert, minutes: int, now: datetime) -> None:
+    """
+    Эскалация доверенным лицам с учётом доставки по каждому контакту.
+
+    escalated_at ставится, только когда всем доверенным доставлено (или попытки исчерпаны).
+    Пока он пустой, escalation_step на следующем тике снова вернёт NOTIFY_TRUSTED, и мы
+    повторим отправку тем, кому не дошло; кому уже доставили — пропускаем.
+    Исключение из notify_trusted (таймаут, сеть, 5xx Telegram) — временный сбой, повторяем.
+    Постоянные ошибки (доверенный заблокировал бота) notify_trusted обрабатывает сам и не
+    бросает — повторять их бессмысленно.
+    """
+    chats = repo.trusted_chat_ids(user.id)
+    if not chats:
+        log.warning("escalation alert_id=%s: доверенного лица нет", alert.id)
+        repo.mark_escalated(alert.id, now)
+        return
+    state = repo.trusted_delivery_state(alert.id)
+    pending = []
+    for chat_id in chats:
+        delivered, attempts = state.get(chat_id, (False, 0))
+        if delivered:
+            continue
+        if attempts >= TRUSTED_MAX_ATTEMPTS:
+            continue
+        pending.append(chat_id)
+
+    for chat_id in pending:
+        try:
+            await notify_trusted(alert, chat_id, minutes)
+        except Exception as e:
+            attempts = repo.record_trusted_attempt(alert.id, chat_id, now, delivered=False)
+            log.warning("escalation alert_id=%s → chat %s: не доставлено (%s), попытка %d из %d",
+                        alert.id, chat_id, type(e).__name__, attempts, TRUSTED_MAX_ATTEMPTS)
+            state[chat_id] = (False, attempts)
+            continue
+        repo.record_trusted_attempt(alert.id, chat_id, now, delivered=True)
+        state[chat_id] = (True, state.get(chat_id, (False, 0))[1] + 1)
+        log.info("escalation alert_id=%s user_id=%s → доверенному chat %s, без ответа %s мин",
+                 alert.id, user.id, chat_id, minutes)
+
+    undelivered = [c for c in chats if not state.get(c, (False, 0))[0]]
+    exhausted = [c for c in undelivered if state.get(c, (False, 0))[1] >= TRUSTED_MAX_ATTEMPTS]
+    if not undelivered or len(exhausted) == len(undelivered):
+        repo.mark_escalated(alert.id, now)
+        if exhausted:
+            log.error("escalation alert_id=%s: не удалось доставить доверенным %s за %d попыток",
+                      alert.id, exhausted, TRUSTED_MAX_ATTEMPTS)
 
 
 # ------------------------------------------------------------------- живой прогон ---
