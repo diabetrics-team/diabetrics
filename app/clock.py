@@ -8,7 +8,9 @@ CLOCK=system      — системное UTC (прод).
 CLOCK=nightscout  — виртуальное время fake-NS / Nightscout (serverTimeEpoch).
                     pipeline вызывает sync_with_server(ms) после каждого запроса status.json;
                     между синхронизациями время идёт с той же скоростью, что на сервере
-                    (--speed 60 → ×60). Скорость часы вычисляют сами по двум синхронизациям.
+                    (--speed 60 → ×60). Скорость часы вычисляют сами по синхронизациям.
+                    Новая скорость принимается, только если две синхронизации подряд её
+                    подтвердили: перезапуск fake-NS (время прыгает на дни) не сбивает часы.
 
 Режим читается при первом вызове, а не при импорте: так успевает сработать load_dotenv().
 """
@@ -24,6 +26,8 @@ _mode: str | None = None              # system | nightscout; None — ещё н�
 _server_ms: int | None = None         # последний serverTimeEpoch
 _mono_at_sync: float | None = None    # time.monotonic() в момент этой синхронизации
 _rate = 1.0                           # секунд сервера за секунду реального времени
+_pending_rate: float | None = None    # новая скорость, ждёт подтверждения следующей синхронизацией
+_RATE_TOLERANCE = 0.25                # «та же скорость» — в пределах ±25 %
 _frozen: datetime | None = None       # для тестов и pipeline.replay
 _monotonic = time.monotonic           # подменяется в тестах
 
@@ -54,17 +58,36 @@ def sync_with_server(server_time_epoch_ms: int) -> None:
     pipeline вызывает после каждого запроса /api/v1/status.json.
     В режиме CLOCK=nightscout часы подстраиваются под виртуальное время fake-NS.
     """
-    global _server_ms, _mono_at_sync, _rate
+    global _server_ms, _mono_at_sync
     if _get_mode() != "nightscout":
         return
     mono = _monotonic()
     if _server_ms is not None and _mono_at_sync is not None and mono > _mono_at_sync:
-        rate = (server_time_epoch_ms - _server_ms) / 1000 / (mono - _mono_at_sync)
-        # время сервера пошло назад (fake-NS перезапустили) — скорость не трогаем
-        if 0 < rate <= _MAX_RATE:
-            _rate = rate
+        _update_rate((server_time_epoch_ms - _server_ms) / 1000 / (mono - _mono_at_sync))
     _server_ms = int(server_time_epoch_ms)
     _mono_at_sync = mono
+
+
+def _close(a: float, b: float) -> bool:
+    return abs(a - b) <= _RATE_TOLERANCE * max(a, b)
+
+
+def _update_rate(candidate: float) -> None:
+    """
+    Скорость меняется, только если её подтвердили две синхронизации подряд.
+    Одиночный прыжок (fake-NS перезапустили со сценарием другого дня, время ушло назад
+    или вперёд на дни) даёт одну дикую оценку — её игнорируем, скорость остаётся прежней.
+    """
+    global _rate, _pending_rate
+    if not 0 < candidate <= _MAX_RATE:
+        _pending_rate = None
+        return
+    if _close(candidate, _rate):
+        _rate, _pending_rate = candidate, None          # та же скорость — уточняем
+    elif _pending_rate is not None and _close(candidate, _pending_rate):
+        _rate, _pending_rate = candidate, None          # новая скорость подтвердилась
+    else:
+        _pending_rate = candidate                       # ждём подтверждения
 
 
 def uses_server_time() -> bool:
@@ -93,10 +116,11 @@ def unfreeze() -> None:
 
 def reset() -> None:
     """Сбросить всё состояние часов и заново прочитать CLOCK при следующем вызове."""
-    global _mode, _server_ms, _mono_at_sync, _rate, _frozen, _monotonic
+    global _mode, _server_ms, _mono_at_sync, _rate, _pending_rate, _frozen, _monotonic
     _mode = None
     _server_ms = None
     _mono_at_sync = None
     _rate = 1.0
+    _pending_rate = None
     _frozen = None
     _monotonic = time.monotonic
