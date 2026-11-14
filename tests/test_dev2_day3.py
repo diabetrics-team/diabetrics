@@ -81,6 +81,19 @@ class ModeTests(unittest.TestCase):
                 if alerts:
                     self.assertEqual(alerts[0].needs_ack, expected is Level.CRITICAL)
 
+    def test_night_suppresses_noncritical_alerts(self):
+        low_at = NOW - timedelta(minutes=5)
+        prior_low = Alert(Level.CRITICAL, AlertKind.LOW, low_at, 3.5, True)
+        cases = [
+            ([Reading(low_at, 3.5), Reading(NOW, 5.0)], None, [prior_low], AlertKind.BACK_IN_RANGE),
+            ([Reading(NOW, 6.0)], Forecast(2.9, 2.8, 0), [], AlertKind.PREDICTED_LOW),
+        ]
+        for history, forecast, recent, kind in cases:
+            with self.subTest(kind=kind):
+                normal = evaluate(history, forecast, ModeState(), NOW, recent)
+                self.assertEqual([alert.kind for alert in normal], [kind])
+                self.assertEqual(evaluate(history, forecast, ModeState(Mode.NIGHT), NOW, recent), [])
+
     def test_critical_alerts_are_visible_in_each_mode(self):
         for mode in Mode:
             with self.subTest(mode=mode):

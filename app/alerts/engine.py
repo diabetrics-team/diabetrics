@@ -80,7 +80,7 @@ def _sustained(history: Sequence[Reading], threshold: float) -> bool:
 def _visible(alert: Alert, active_mode: Mode) -> bool:
     if alert.level is Level.CRITICAL:
         return True
-    if active_mode is Mode.DND:
+    if active_mode in (Mode.DND, Mode.NIGHT):
         return False
     if active_mode is Mode.WORK:
         return alert.level is not Level.INFO
