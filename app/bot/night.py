@@ -16,6 +16,8 @@ from zoneinfo import ZoneInfo
 from app.models import Mode, ModeState
 
 DEFAULT_TZ = "Europe/Moscow"   # tz ещё не выбран в онбординге — как в остальном боте
+# Сколько после конца «После коррекции гипо» ждём показание для перепроверки (шаг датчика 5 мин)
+HYPO_RECHECK_WINDOW = timedelta(minutes=15)
 
 
 def parse_hhmm(value: str) -> time:
@@ -55,6 +57,11 @@ def night_until(user: Any, now: datetime) -> datetime | None:
 def effective_mode(state: ModeState, user: Any, now: datetime) -> ModeState:
     """Режим с учётом расписания: «Обычный» ночью превращается в «Ночной» до конца ночи."""
     if state.active(now) is not Mode.NORMAL:
+        return state
+    if (state.kind is Mode.AFTER_HYPO and state.until is not None
+            and state.until <= now < state.until + HYPO_RECHECK_WINDOW):
+        # «После коррекции гипо» только что истёк: движку нужен именно этот режим, чтобы
+        # перепроверить сахар (still_low). Ночное расписание не должно его подменять.
         return state
     until = night_until(user, now)
     return ModeState(Mode.NIGHT, until=until) if until is not None else state
