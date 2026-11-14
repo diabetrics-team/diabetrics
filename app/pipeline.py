@@ -85,8 +85,12 @@ def _is_blocked(error: Exception) -> bool:
     return type(error).__name__ == "TelegramForbiddenError"
 
 
-async def _send(user: Any, repo: Any, alert: Alert, *, repeat: bool = False) -> int | None:
-    """notify() + лог. Ошибка Telegram не роняет обработку пользователя."""
+async def _send(user: Any, repo: Any, alert: Alert, *, repeat: bool = False) -> tuple[bool, int | None]:
+    """notify() + лог. Возвращает (отправлено ли, message_id).
+
+    Ошибка Telegram не роняет обработку пользователя. message_id бывает None и при успехе
+    (вывод в консоль без Telegram), поэтому успех возвращается отдельно.
+    """
     what = "repeat" if repeat else "alert"
     try:
         message_id = await notify(alert, user.chat_id)
@@ -96,11 +100,11 @@ async def _send(user: Any, repo: Any, alert: Alert, *, repeat: bool = False) -> 
             log.warning("user_id=%s заблокировал бота — опрос остановлен", user.id)
         else:
             log.exception("%s alert_id=%s user_id=%s: не отправлено", what, alert.id, user.id)
-        return None
+        return False, None
     log.info("%s alert_id=%s user_id=%s %s/%s value=%s",
              what, alert.id, user.id, Level(alert.level).value, AlertKind(alert.kind).value,
              alert.value)
-    return message_id
+    return True, message_id
 
 
 async def _ns_failed(user: Any, repo: Any, error: Exception) -> None:
@@ -113,7 +117,7 @@ async def _ns_failed(user: Any, repo: Any, error: Exception) -> None:
         return
     alert = Alert(Level.IMPORTANT, AlertKind.NS_UNREACHABLE, now, user_id=user.id)
     repo.save_alert(alert, sent_at=now)
-    message_id = await _send(user, repo, alert)
+    _, message_id = await _send(user, repo, alert)
     if message_id is not None:
         repo.mark_sent(alert.id, now, message_id)
     _ns_down_alerted.add(user.id)
@@ -194,7 +198,7 @@ async def process_user(user: Any, repo: Any, client_factory: Any) -> list[Alert]
     for alert in evaluate(history, predict(history), mode, now, recent):
         alert.user_id = user.id
         repo.save_alert(alert, sent_at=now)       # сначала БД: кнопке нужен alert.id
-        message_id = await _send(user, repo, alert)
+        _, message_id = await _send(user, repo, alert)
         if message_id is not None:
             repo.mark_sent(alert.id, now, message_id)
         recent.append(alert)
@@ -233,8 +237,9 @@ async def _escalate(user: Any, repo: Any, now: datetime) -> None:
     ):
         alert = action.alert
         if action.type is ActionType.REPEAT:
-            message_id = await _send(user, repo, alert, repeat=True)
-            repo.mark_sent(alert.id, now, message_id)
+            delivered, message_id = await _send(user, repo, alert, repeat=True)
+            if delivered:       # не дошло (таймаут, сеть) — повторим на следующем тике
+                repo.mark_sent(alert.id, now, message_id)
         elif action.type is ActionType.NOTIFY_TRUSTED:
             minutes = action.extra.get(
                 "minutes_without_ack", int((now - alert.created_at).total_seconds() // 60)
