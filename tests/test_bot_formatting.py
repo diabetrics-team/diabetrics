@@ -51,7 +51,7 @@ def test_format_age():
 def test_describe_mode_temporary_shows_time_left_and_expires():
     state = ModeState(Mode.AFTER_MEAL, until=T0 + timedelta(minutes=100))
     assert describe_mode(state, T0) == "🍽 После еды, ещё 1 ч 40 мин"
-    assert describe_mode(state, T0 + timedelta(minutes=101)) == "🟢 Обычный"   # автовыход
+    assert describe_mode(state, T0 + timedelta(minutes=101)) == "🔔 Обычный"   # автовыход
     assert describe_mode(ModeState(Mode.NIGHT), T0) == "🌙 Ночной"
 
 
@@ -85,10 +85,19 @@ def test_trusted_alert_text():
     alert = Alert(Level.CRITICAL, AlertKind.VERY_LOW, T0, value=2.84)
     text = format_trusted_alert(alert, "Аня <3", "DoubleDown", 12)
     assert text.startswith("🔴 <b>Аня &lt;3 не отвечает на уведомление уже 12 мин.</b>")   # имя экранировано
-    assert "Сахар: 2.8 ммоль/л ↓↓\n" in text
+    assert "Сахар сейчас: 2.8 ммоль/л ↓↓\n" in text
     no_info = format_trusted_alert(alert, None, None, 5)
     assert no_info.startswith("🔴 <b>Близкий вам человек не отвечает")
-    assert "Сахар: 2.8 ммоль/л\n" in no_info, "без стрелки — без пробела в конце строки"
+    assert "Сахар сейчас: 2.8 ммоль/л\n" in no_info, "без стрелки — без пробела в конце строки"
+
+
+def test_trusted_alert_for_forecast_shows_current_sugar_not_forecast():
+    """Найдено на репетиции: эскалация «Сахар падает» показывала Боре прогноз 3.0 как сахар."""
+    forecast = Alert(Level.CRITICAL, AlertKind.PREDICTED_LOW, T0, value=3.0)
+    text = format_trusted_alert(forecast, "Аня", "Flat", 10, current=3.9)
+    assert "Уведомление: <b>Сахар падает:</b> через 20 минут может быть 3.0 ммоль/л." in text
+    assert "Сахар сейчас: 3.9 ммоль/л →" in text
+    assert "Сахар сейчас: — ммоль/л" in format_trusted_alert(forecast, "Аня", None, 10), "без показаний — не прогноз"
 
 
 def test_format_local_time():
@@ -106,7 +115,7 @@ def test_now_fast_drop_shows_value_arrow_age_forecast_mode():
     assert any(arrow in text for arrow in "↓↘")
     assert "3 мин назад" in text
     assert "Через 20 мин" in text
-    assert "Режим: 🟢 Обычный" in text
+    assert "Режим: 🔔 Обычный" in text
 
 
 def test_now_stale_data_hides_forecast():
