@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"     # как в Dockerfile
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install
+        run: pip install -r requirements-dev.txt
+
+      - name: Ruff
+        run: ruff check .
+
+      - name: Pytest
+        run: pytest -q -rs
+
+      - name: Сценарии fake_cgm через pipeline
+        run: python scripts/run_scenarios.py --md scenarios-report.md
+
+      - name: Отчёт по сценариям
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenarios-report
+          path: scenarios-report.md
+          if-no-files-found: ignore

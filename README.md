@@ -42,10 +42,23 @@ CGM-датчик → Nightscout → клиент → очистка → прог
 
 ## Запуск
 
+Бот и pipeline работают в одном процессе: `python -m app.main`.
+
+### Локально, без Docker
+
 ```bash
-git clone <адрес репозитория> && cd <папка>
-cp .env.example .env        # заполнить значения
-docker compose up -d
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+cp .env.example .env        # вписать BOT_TOKEN
+python -m app.main
+```
+
+### Docker
+
+```bash
+cp .env.example .env        # вписать BOT_TOKEN
+docker compose up -d --build
+docker compose logs -f bot
 ```
 
 | Переменная `.env` | Значение |
@@ -54,26 +67,96 @@ docker compose up -d
 | `VISION_API_KEY` | ключ сервиса распознавания фото (NutriLens) |
 | `CLOCK` | `system` — обычная работа, `nightscout` — время берётся с сервера (для демо) |
 | `DATABASE_URL` | по умолчанию `sqlite:///data/diabetrics.db` |
+| `POLL_SECONDS` | период опроса Nightscout, по умолчанию 60; для демо — 5 |
+| `HEALTH_PORT` | порт `/health`, по умолчанию 8080; `0` — выключить |
+| `LOG_LEVEL` | `INFO` по умолчанию |
 
 Адрес и токен Nightscout каждый пользователь вводит в боте сам. Файл `.env` в репозиторий не попадает.
 
 ### Без датчика: фейковый Nightscout
 
+Без Telegram — уведомления печатаются в консоль (два терминала):
+
 ```bash
-python fake_cgm/fake_cgm.py --list                                        # 14 сценариев
-python fake_cgm/fake_cgm.py --serve --scenario night_hypo --speed 60      # http://localhost:1337
+python fake_cgm/fake_cgm.py --serve --scenario night_hypo --speed 60 --skip 150 --token secret
+CLOCK=nightscout python -m app.pipeline --live http://localhost:1337 --token secret --every 4
 ```
 
-В боте укажите адрес `http://localhost:1337`, в `.env` — `CLOCK=nightscout`. Ночная гипогликемия проиграется за несколько минут. Подробнее — `fake_cgm/README.md`.
+С ботом в Docker — fake-NS поднимается рядом, в `.env`: `CLOCK=nightscout`, `POLL_SECONDS=5`:
+
+```bash
+docker compose --profile demo up -d --build
+```
+
+В боте адрес **`http://fake-ns:1337`** (внутри Docker это не `localhost`), токен `secret`. Сценарий, скорость и пропуск — `SCENARIO`, `SPEED`, `SKIP` в `.env`. Список сценариев: `python fake_cgm/fake_cgm.py --list`, подробнее — `fake_cgm/README.md`.
+
+Сценарий переключается одной командой, бот перезапускать и заново подключать не нужно:
+
+```bash
+scripts/demo.sh noise_spike          # сценарий [скорость] [пропуск, мин]
+```
+
+Скрипт пересоздаёт fake-NS и чистит показания, уведомления и режимы прошлого прогона; пользователи и доверенные лица остаются. Сценарий при ×30 идёт 5–15 минут, потом fake-NS перестаёт присылать данные и бот честно сообщает «Нет данных от датчика» — для нового прогона снова `scripts/demo.sh`.
 
 ### Тесты
 
 ```bash
 pip install -r requirements-dev.txt
+ruff check .
 pytest
 ```
 
 Ожидаемое поведение для каждого сценария лежит в `fake_cgm/data/scenarios.json`.
+
+### Прогон всех сценариев
+
+```bash
+python scripts/run_scenarios.py --md docs/scenarios-report.md
+```
+
+Все 14 сценариев (и нужные режимы) проходят через настоящий pipeline: очистка, прогноз, правила, антиспам, эскалация, база. Подменены только Nightscout и Telegram, время идёт по минуте. Результат сверяется с `scenarios.json`, отчёт со всеми уведомлениями — в [`docs/scenarios-report.md`](docs/scenarios-report.md).
+
+`ruff`, `pytest` и прогон сценариев запускаются в GitHub Actions на каждый PR.
+
+## Деплой на сервер
+
+Нужен Linux-сервер (1 vCPU, 1–2 ГБ RAM, 10 ГБ диска) с Docker и доступом к `api.telegram.org`. Входящие порты боту не нужны: он сам опрашивает Telegram.
+
+1. **Проверить Telegram** с сервера — без этого дальше нет смысла:
+   ```bash
+   curl -sS -m 10 https://api.telegram.org/bot<BOT_TOKEN>/getMe     # ждём {"ok":true
+   ```
+2. **Docker** (если нет): `curl -fsSL https://get.docker.com | sh`, затем `sudo usermod -aG docker $USER` и перезайти.
+3. **Код и настройки:**
+   ```bash
+   git clone https://github.com/diabetrics-team/diabetrics.git && cd diabetrics
+   git checkout main                         # до релиза в субботу — develop
+   cp .env.example .env && nano .env        # BOT_TOKEN, для демо CLOCK=nightscout и POLL_SECONDS=5
+   ```
+4. **Запуск:** `docker compose up -d --build` (демо с fake-NS: `docker compose --profile demo up -d --build`).
+5. **Проверка:**
+   ```bash
+   docker compose ps                     # bot — Up (healthy)
+   docker compose logs -f bot            # «DiaBetrics запущен …»
+   curl -s localhost:8080/health         # {"status": "ok", ...}
+   ```
+6. **Обновление:** `git pull && docker compose up -d --build`. База в `./data` сохраняется.
+
+Контейнер перезапускается сам (`restart: unless-stopped`), в том числе после перезагрузки сервера. Открытые критические уведомления хранятся в базе, поэтому эскалация после перезапуска продолжается.
+
+**Внешний мониторинг.** `/health` отвечает 200, пока pipeline регулярно отрабатывает, и 503, если процесс завис. Чтобы проверять его извне (например, UptimeRobot), в `docker-compose.yml` замените `"127.0.0.1:8080:8080"` на `"8080:8080"`.
+
+**Логи.** Каждое уведомление, повтор, эскалация доверенному лицу и «Я в порядке» пишутся в лог (`docker compose logs bot`). Токены Nightscout и Telegram из логов вырезаются.
+
+## Демо на защите (≈6 мин)
+
+Подготовка: `.env` с `CLOCK=nightscout`, `POLL_SECONDS=5`; `docker compose --profile demo up -d --build`; в боте с двух телефонов — `/start` (адрес `http://fake-ns:1337`, токен `secret`) и `/trusted` для второго.
+
+1. **Ночная гипогликемия.** `scripts/demo.sh night_hypo` → в боте `/mode` → Ночной. Через ~40 с — критическое «низкий», затем «очень низкий». Никто не нажимает «Я в порядке» → повтор → сообщение доверенному лицу.
+2. **Ложная тревога.** `scripts/demo.sh noise_spike` → через ~20 с проходит выброс датчика 2.8 ммоль/л — уведомлений нет.
+3. **NutriLens.** `scripts/demo.sh meal` → сразу фото еды → КБЖУ → «Включить „После еды“». Через ~50 с сахар быстро растёт — уведомлений нет. Порядок важен: `demo.sh` сбрасывает режимы.
+
+Если что-то пошло не так: `docker compose logs --tail=50 bot`, `curl -s localhost:8080/health`.
 
 ## Команды бота
 
