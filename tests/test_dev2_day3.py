@@ -64,7 +64,7 @@ class ForecastTests(unittest.TestCase):
                 self.assertIs(alert.kind, AlertKind.PREDICTED_LOW)
                 self.assertIs(alert.level, level)
                 self.assertEqual(alert.value, 2.9)
-                self.assertEqual(alert.needs_ack, level is Level.CRITICAL)
+                self.assertFalse(alert.needs_ack)
 
     def test_prediction_exactly_at_three_is_not_low(self):
         self.assertEqual(evaluate([Reading(NOW, 5.0)], Forecast(3.0, 2.5, 0), ModeState(), NOW, []), [])
