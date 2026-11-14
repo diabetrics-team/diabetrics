@@ -1,6 +1,6 @@
 # Прогон сценариев fake_cgm через pipeline
 
-Настоящие clean → predict → evaluate → антиспам → эскалация; подменены только Nightscout и Telegram. БД: подделка БД из тестов (--repo memory). Доверенное лицо подключено, «Я в порядке» никто не нажимает. Время — МСК.
+Настоящие clean → predict → evaluate → антиспам → эскалация; подменены только Nightscout и Telegram. БД: SQLite в памяти (app/db.py). Доверенное лицо подключено, «Я в порядке» никто не нажимает. Время — МСК.
 
 Сгенерировано: `python scripts/run_scenarios.py --md docs/scenarios-report.md`.
 
@@ -9,6 +9,7 @@
 | normal · normal | ✅ | 15:20 important/no_data, 15:35 important/no_data, 15:50 important/no_data | — |
 | night_hypo · normal | ✅ | 01:45 critical/predicted_low, 01:50 important/low, 02:20 critical/predicted_low, 02:50 critical/predicted_low, 03:00 critical/very_low, 03:05 critical/predicted_low … | 01:55 |
 | night_hypo · night | ✅ | 01:45 critical/predicted_low, 01:50 critical/low, 02:20 critical/predicted_low, 02:50 critical/predicted_low, 03:00 critical/very_low, 03:05 critical/predicted_low … | 01:55 |
+| night_hypo · normal + ночь по расписанию 23:00–07:00 | ✅ | 01:45 critical/predicted_low, 01:50 critical/low, 02:20 critical/predicted_low, 02:50 critical/predicted_low, 03:00 critical/very_low, 03:05 critical/predicted_low … | 01:55 |
 | meal · normal | ✅ | 08:30 important/fast_rise, 09:40 important/high_1h, 10:25 info/back_in_range, 12:20 important/no_data, 12:35 important/no_data, 12:50 important/no_data | — |
 | meal · after_meal | ✅ | 12:20 important/no_data, 12:35 important/no_data, 12:50 important/no_data | — |
 | fast_drop · normal | ✅ | 16:45 important/fast_drop, 16:45 critical/predicted_low, 16:55 important/low, 17:00 critical/predicted_low, 17:15 info/back_in_range, 18:20 important/no_data … | 16:55 |
@@ -24,7 +25,7 @@
 | dirty_data · normal | ✅ | 14:20 important/no_data, 14:35 important/no_data, 14:50 important/no_data | — |
 | random_day · normal | ✅ | 13:30 important/fast_rise, 14:35 important/high_1h, 15:25 info/back_in_range, 00:20 important/no_data, 00:35 important/no_data, 00:50 important/no_data | — |
 
-Итого: 17 из 17 случаев прошли.
+Итого: 18 из 18 случаев прошли.
 
 ## Подробно
 
@@ -85,6 +86,44 @@
 - ✅ critical low в 01:50
 - ✅ нет important low
 - ✅ доверенному лицу — в 01:55
+
+| Время | Уровень | Вид | Значение | Кому |
+|---|---|---|---|---|
+| 01:45 | critical | predicted_low | 3.0 | пользователю |
+| 01:50 | critical | low | 3.9 | пользователю |
+| 01:50 | critical | predicted_low | 3.0 | пользователю |
+| 01:55 | critical | predicted_low | 3.0 | доверенному |
+| 01:55 | critical | low | 3.9 | пользователю |
+| 02:00 | critical | low | 3.9 | доверенному |
+| 02:20 | critical | predicted_low | 3.0 | пользователю |
+| 02:25 | critical | predicted_low | 3.0 | пользователю |
+| 02:30 | critical | predicted_low | 3.0 | доверенному |
+| 02:50 | critical | predicted_low | 2.8 | пользователю |
+| 02:55 | critical | predicted_low | 2.8 | пользователю |
+| 03:00 | critical | very_low | 2.9 | пользователю |
+| 03:00 | critical | predicted_low | 2.8 | доверенному |
+| 03:05 | critical | predicted_low | 2.4 | пользователю |
+| 03:05 | critical | very_low | 2.9 | пользователю |
+| 03:10 | critical | very_low | 2.9 | доверенному |
+| 03:10 | critical | predicted_low | 2.4 | пользователю |
+| 03:15 | critical | predicted_low | 2.4 | доверенному |
+| 03:20 | critical | predicted_low | 2.6 | пользователю |
+| 03:25 | critical | predicted_low | 2.6 | пользователю |
+| 03:30 | critical | predicted_low | 2.6 | доверенному |
+| 03:35 | critical | predicted_low | 2.4 | пользователю |
+| 03:40 | critical | predicted_low | 2.4 | пользователю |
+| 03:45 | critical | predicted_low | 2.4 | доверенному |
+| 04:20 | info | back_in_range | 4.3 | пользователю |
+| 07:20 | important | no_data | 6.5 | пользователю |
+| 07:35 | important | no_data | 6.5 | пользователю |
+| 07:50 | important | no_data | 6.5 | пользователю |
+
+### night_hypo · normal + ночь по расписанию 23:00–07:00 ✅
+
+Ожидание: важное low при first_below_3_9 (в Ночном режиме — сразу критическое); критическое very_low не позже first_below_3_0; предиктивное — раньше; нет «Я в порядке» -> повтор -> доверенному лицу
+
+- ✅ critical low в 01:50
+- ✅ нет important low
 
 | Время | Уровень | Вид | Значение | Кому |
 |---|---|---|---|---|
