@@ -147,6 +147,20 @@ class TrustedContact(Base):
     confirmed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
 
+class TrustedDelivery(Base):
+    """Доставка эскалации каждому доверенному лицу: повторяем только тем, кому не дошло."""
+
+    __tablename__ = "trusted_deliveries"
+    __table_args__ = (UniqueConstraint("alert_id", "chat_id", name="uq_trusted_delivery"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    alert_id: Mapped[int] = mapped_column(ForeignKey("alerts.id", ondelete="CASCADE"), index=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    delivered_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+
 # ------------------------------------------------------------------ подключение ---
 
 def make_engine(url: str = "sqlite:///data/diabetrics.db", *, echo: bool = False) -> Engine:
@@ -452,6 +466,28 @@ def trusted_chat_ids(user_id: int) -> list[int]:
         return list(s.scalars(select(TrustedContact.chat_id).where(
             TrustedContact.user_id == user_id, TrustedContact.confirmed_at.is_not(None)
         )))
+
+
+def trusted_delivery_state(alert_id: int) -> dict[int, tuple[bool, int]]:
+    """chat_id доверенного → (доставлено ли, сколько было попыток) по этой тревоге."""
+    with _session() as s:
+        rows = s.scalars(select(TrustedDelivery).where(TrustedDelivery.alert_id == alert_id))
+        return {r.chat_id: (r.delivered_at is not None, r.attempts) for r in rows}
+
+
+def record_trusted_attempt(alert_id: int, chat_id: int, at: datetime, delivered: bool) -> int:
+    """Записать попытку отправки доверенному. Возвращает число попыток по этому контакту."""
+    with _session() as s, s.begin():
+        row = s.scalar(select(TrustedDelivery).where(
+            TrustedDelivery.alert_id == alert_id, TrustedDelivery.chat_id == chat_id))
+        if row is None:
+            row = TrustedDelivery(alert_id=alert_id, chat_id=chat_id, attempts=0)
+            s.add(row)
+        row.attempts = (row.attempts or 0) + 1
+        row.last_attempt_at = at
+        if delivered:
+            row.delivered_at = at
+        return row.attempts
 
 
 def remove_trusted(user_id: int, chat_id: int | None = None) -> int:

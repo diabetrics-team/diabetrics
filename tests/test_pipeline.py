@@ -42,6 +42,7 @@ class FakeRepo:
         self.sent_at: dict[int, datetime] = {}
         self.trusted = {u.id: [] for u in users}
         self.saved_batches = []
+        self.deliveries: dict[tuple[int, int], tuple[bool, int]] = {}
 
     def active_users(self):
         return list(self.users)
@@ -97,6 +98,14 @@ class FakeRepo:
 
     def trusted_chat_ids(self, uid):
         return self.trusted[uid]
+
+    def trusted_delivery_state(self, aid):
+        return {chat: tuple(v) for (a, chat), v in self.deliveries.items() if a == aid}
+
+    def record_trusted_attempt(self, aid, chat, at, delivered):
+        done, attempts = self.deliveries.get((aid, chat), (False, 0))
+        self.deliveries[aid, chat] = (done or delivered, attempts + 1)
+        return attempts + 1
 
 
 class FakeNS:
