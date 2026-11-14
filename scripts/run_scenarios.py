@@ -38,6 +38,7 @@ MSK = timezone(timedelta(hours=3))
 USER_CHAT, TRUSTED_CHAT = 111, 999
 TAIL = timedelta(minutes=60)     # после последнего показания: ловим no_data и эскалацию
 REACTION = timedelta(minutes=5)  # через сколько пользователь включает режим после уведомления
+NIGHT_OFF = ("00:00", "00:00")   # night_start == night_end — расписание выключено (как в /settings)
 
 CRIT, IMP = Level.CRITICAL, Level.IMPORTANT
 K = AlertKind
@@ -180,11 +181,15 @@ class Case:
     mode: Mode = Mode.NORMAL
     checks: list[Check] = field(default_factory=list)
     mode_on_first_low: Mode | None = None    # пользователь включает режим, прочитав первое low
+    # Ночь по расписанию (Dev 3): в БД по умолчанию 23:00–07:00. В остальных случаях выключена,
+    # иначе ночные сценарии всегда шли бы в «Ночном» и «Обычный» не проверялся бы.
+    night_schedule: tuple[str, str] | None = None
 
     @property
     def title(self) -> str:
         m = self.mode_on_first_low or self.mode
-        return f"{self.scenario} · {m.value}"
+        night = f" + ночь по расписанию {'–'.join(self.night_schedule)}" if self.night_schedule else ""
+        return f"{self.scenario} · {m.value}{night}"
 
 
 CASES = [
@@ -196,6 +201,8 @@ CASES = [
         trusted(True)]),
     Case("night_hypo", Mode.NIGHT, checks=[
         has(K.LOW, CRIT, "first_below_3_9"), absent(K.LOW, IMP), trusted(True)]),
+    Case("night_hypo", night_schedule=("23:00", "07:00"), checks=[
+        has(K.LOW, CRIT, "first_below_3_9"), absent(K.LOW, IMP)]),
     Case("meal", checks=[has(K.FAST_RISE, IMP, "first_fast_rise"), has(K.HIGH_1H, IMP, "above_10_0_for_1h_at")]),
     Case("meal", Mode.AFTER_MEAL, checks=[none_of(CRIT, IMP)]),
     Case("fast_drop", checks=[
@@ -253,13 +260,14 @@ class FakeNS:
 class DbRepo:
     """Настоящая app/db.py на SQLite в памяти."""
 
-    def __init__(self) -> None:
+    def __init__(self, night: tuple[str, str]) -> None:
         from app import db
 
         self.db = db
         db.configure("sqlite:///:memory:")
         t = datetime(2026, 1, 1, tzinfo=timezone.utc)
-        self.user = db.upsert_user(USER_CHAT, t, name="Демо", ns_url="http://fake", tz="Europe/Moscow")
+        self.user = db.upsert_user(USER_CHAT, t, name="Демо", ns_url="http://fake", tz="Europe/Moscow",
+                                   night_start=night[0], night_end=night[1])
         db.create_invite(self.user.id, "demo-invite", t)
         db.accept_invite("demo-invite", TRUSTED_CHAT, "Доверенное лицо", t)
 
@@ -270,12 +278,14 @@ class DbRepo:
         self.db.set_mode(self.user.id, state, now)
 
 
-def memory_repo():
+def memory_repo(night: tuple[str, str]):
     from tests.test_pipeline import U, FakeRepo
 
     class MemRepo(FakeRepo):
         def __init__(self) -> None:
             self.user = U(1, USER_CHAT)
+            self.user.night_start, self.user.night_end = night     # как колонки users в БД
+            self.user.tz = "Europe/Moscow"
             super().__init__([self.user])
             self.trusted[1] = [TRUSTED_CHAT]
             self.mode = ModeState()
@@ -301,7 +311,7 @@ async def run_case(case: Case, make_repo: Callable) -> Run:
     end = datetime.fromtimestamp(max(dates) / 1000, timezone.utc) + TAIL
 
     run = Run(start=start, data_end=end - TAIL, points=len(clean(entries)))
-    repo = make_repo()
+    repo = make_repo(case.night_schedule or NIGHT_OFF)
     repo.set_user_mode(ModeState(case.mode), start)
 
     async def fake_notify(alert, chat_id):
