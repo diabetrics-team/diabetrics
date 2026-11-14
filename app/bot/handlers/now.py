@@ -34,5 +34,7 @@ async def now_cmd(message: Message) -> None:
     except NSError:
         await message.answer(texts.ERROR_NS_UNAVAILABLE)
         return
-    text = format_now(readings, predict(readings), storage.get_mode(user.telegram_id), clock.now())
+    now = clock.now()
+    mode, scheduled = storage.current_mode(user.telegram_id, now)
+    text = format_now(readings, predict(readings), mode, now, scheduled, user.tz)
     await message.answer(text)

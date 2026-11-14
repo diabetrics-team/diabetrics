@@ -77,7 +77,7 @@ def test_notify_without_bot_prints_to_console(capsys):
     alert = Alert(Level.CRITICAL, AlertKind.VERY_LOW, T0, value=2.8, needs_ack=True, id=1)
     asyncio.run(notify.notify(alert, chat_id=42))
     out = capsys.readouterr().out
-    assert "[notify → 42] 🔴 Очень низкий сахар: 2.8 ммоль/л" in out
+    assert "[notify → 42] 🔴 15:00 · Очень низкий сахар: 2.8 ммоль/л" in out   # 12:00 UTC = 15:00 МСК
     assert "<b>" not in out and "[кнопка]" in out
 
 
@@ -113,7 +113,7 @@ def test_now_stale_data_hides_forecast():
     readings = load("sensor_lost")             # датчик отвалился и не вернулся
     now = readings[-1].ts + timedelta(minutes=40)
     text = format_now(readings, Forecast(6.0, 6.0, 0.0), ModeState(), now)
-    assert "Давно нет новых данных" in text and "Через 20 мин" not in text
+    assert "Новых данных давно нет" in text and "Через 20 мин" not in text
     assert "40 мин назад" in text
 
 

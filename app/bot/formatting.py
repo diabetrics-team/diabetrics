@@ -45,9 +45,12 @@ def format_local_time(moment: datetime, tz: str | None) -> str:
     return moment.astimezone(ZoneInfo(tz or "Europe/Moscow")).strftime("%H:%M")
 
 
-def format_alert(alert: Alert) -> str:
-    template = texts.ALERTS[alert.kind]
-    return f"{texts.LEVEL_EMOJI[alert.level]} " + template.format(value=fmt_mmol(alert.value))
+def format_alert(alert: Alert, tz: str | None = None) -> str:
+    """«🔴 03:12 · Очень низкий сахар: 2.8 ммоль/л…». Время — когда сработало, в поясе пользователя."""
+    head = texts.ALERT_HEAD.format(
+        emoji=texts.LEVEL_EMOJI[alert.level], time=format_local_time(alert.created_at, tz)
+    )
+    return head + texts.ALERTS[alert.kind].format(value=fmt_mmol(alert.value))
 
 
 def format_trusted_alert(alert: Alert, name: str | None, direction: str | None, minutes: int) -> str:
@@ -60,10 +63,12 @@ def format_trusted_alert(alert: Alert, name: str | None, direction: str | None, 
     ).replace(" \n", "\n")   # без стрелки не оставлять пробел в конце строки
 
 
-def describe_mode(state: ModeState, now: datetime) -> str:
-    """«🟢 Обычный» или, для временного режима, «🍽 После еды, ещё 1 ч 40 мин»."""
+def describe_mode(state: ModeState, now: datetime, scheduled: bool = False, tz: str | None = None) -> str:
+    """«🟢 Обычный», «🍽 После еды, ещё 1 ч 40 мин» или «🌙 Ночной по расписанию, до 07:00»."""
     active = state.active(now)          # истёкший временный режим = NORMAL
     title = texts.MODES[active]["title"]
+    if scheduled and state.until is not None:
+        return texts.MODE_SCHEDULED.format(title=title, end=format_local_time(state.until, tz))
     if active is state.kind and state.until is not None:
         left = math.ceil((state.until - now).total_seconds() / 60)
         return texts.MODE_WITH_LEFT.format(title=title, left=format_duration(left))
@@ -75,6 +80,8 @@ def format_now(
     forecast: Forecast | None,
     mode: ModeState,
     now: datetime,
+    scheduled: bool = False,
+    tz: str | None = None,
 ) -> str:
     """Ответ на /now. readings — от старых к новым (как после ns/clean.py)."""
     if not readings:
@@ -91,10 +98,32 @@ def format_now(
         lines.append(texts.NOW_NO_FORECAST)
     else:
         lines.append(texts.NOW_FORECAST.format(value=fmt_mmol(forecast.mmol_20)))
-    lines.append(texts.NOW_MODE.format(mode=describe_mode(mode, now)))
+    lines.append(texts.NOW_MODE.format(mode=describe_mode(mode, now, scheduled, tz)))
     return "\n".join(lines)
 
 
-def format_mode_menu(state: ModeState, now: datetime) -> str:
+def format_night(start: str, end: str) -> tuple[str, str] | None:
+    """Пара (начало, конец) ночного расписания; None — расписание выключено."""
+    return None if not start or not end or start == end else (start, end)
+
+
+def format_mode_menu(
+    state: ModeState, now: datetime, scheduled: bool = False, tz: str | None = None,
+    night_start: str = "23:00", night_end: str = "07:00",
+) -> str:
     modes = "\n".join(texts.MODE_LINE.format(**info) for info in texts.MODES.values())
-    return texts.MODE_MENU.format(current=describe_mode(state, now), modes=modes)
+    night = format_night(night_start, night_end)
+    night_line = (texts.MODE_NIGHT_SCHEDULE.format(start=night[0], end=night[1]) if night
+                  else texts.MODE_NIGHT_SCHEDULE_OFF)
+    return texts.MODE_MENU.format(current=describe_mode(state, now, scheduled, tz), modes=modes, night=night_line)
+
+
+def tz_label(tz: str | None) -> str:
+    return texts.TIMEZONES.get(tz or "Europe/Moscow", tz or "")
+
+
+def format_settings(minutes: int, night_start: str, night_end: str, tz: str | None) -> str:
+    night = format_night(night_start, night_end)
+    night_text = (texts.SETTINGS_NIGHT_RANGE.format(start=night[0], end=night[1]) if night
+                  else texts.SETTINGS_NIGHT_OFF)
+    return texts.SETTINGS.format(minutes=minutes, night=night_text, tz=tz_label(tz))
