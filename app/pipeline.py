@@ -24,14 +24,14 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from app import clock
 from app.alerts.config import TRUSTED_AFTER_MINUTES
-from app.alerts.engine import evaluate, history_start_for_hysteresis
-from app.alerts.escalation import escalation_step
+from app.alerts.engine import evaluate, history_start_for_hysteresis, last_low_recovery
+from app.alerts.escalation import LOW_ESCALATION_KINDS, escalation_step
 from app.bot.night import effective_mode
 from app.bot.notify import notify, notify_trusted
 from app.forecast import predict
@@ -129,8 +129,25 @@ async def _escalate(user: Any, repo: Any, now: datetime) -> None:
         a.id for a in open_alerts
         if (last := repo.last_sent_at(a.id)) is not None and last > a.created_at
     }
+    low_recovered_at = None
+    low_episode_escalated = False
+    if any(a.kind in LOW_ESCALATION_KINDS for a in open_alerts):
+        low_history = [
+            a for a in repo.recent_alerts(user.id, datetime.min.replace(tzinfo=UTC))
+            if a.kind in LOW_ESCALATION_KINDS and a.created_at <= now
+            and (a.escalated_at is not None or a in open_alerts)
+        ]
+        if low_history:
+            since = min(a.created_at for a in low_history) - HISTORY
+            low_recovered_at = last_low_recovery(repo.readings_since(user.id, since), now)
+            low_episode_escalated = any(
+                a.escalated_at is not None and a.escalated_at <= now
+                and (low_recovered_at is None or a.created_at > low_recovered_at)
+                for a in low_history
+            )
     for action in escalation_step(
         open_alerts, now, repeated_alert_ids=repeated,
+        low_recovered_at=low_recovered_at, low_episode_escalated=low_episode_escalated,
         trusted_after_minutes=getattr(user, "escalation_minutes", TRUSTED_AFTER_MINUTES),
     ):
         alert = action.alert
@@ -186,7 +203,16 @@ async def replay(scenario: str, mode: ModeState | None = None, chat_id: int = 0)
             sent.append(alert)
             await notify(alert, chat_id)
         open_alerts = [a for a in sent if a.needs_ack and a.acked_at is None]
-        for action in escalation_step(open_alerts, now, repeated_alert_ids=repeated):
+        recovered_at = last_low_recovery(history, now)
+        episode_escalated = any(
+            a.kind in LOW_ESCALATION_KINDS and a.escalated_at is not None
+            and (recovered_at is None or a.created_at > recovered_at)
+            for a in sent
+        )
+        for action in escalation_step(
+            open_alerts, now, repeated_alert_ids=repeated,
+            low_recovered_at=recovered_at, low_episode_escalated=episode_escalated,
+        ):
             print(f"[escalation] {action.type.value} → alert {action.alert.id}")
             if action.type is ActionType.REPEAT:
                 assert action.alert.id is not None

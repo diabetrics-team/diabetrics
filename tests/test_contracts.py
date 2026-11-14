@@ -10,7 +10,7 @@ import pytest
 
 from app.alerts.engine import evaluate
 from app.forecast import predict
-from app.models import Alert, Forecast, Level, ModeState, Reading
+from app.models import Alert, AlertKind, Forecast, Level, ModeState, Reading
 from app.ns.clean import clean
 from app.pipeline import replay
 
@@ -44,7 +44,7 @@ def test_evaluate_returns_alerts(name):
     readings = load(name)
     alerts = evaluate(readings, predict(readings), ModeState(), readings[-1].ts, [])
     assert isinstance(alerts, list) and all(isinstance(a, Alert) for a in alerts)
-    assert all(a.needs_ack for a in alerts if a.level is Level.CRITICAL)
+    assert all(a.needs_ack == (a.kind is not AlertKind.PREDICTED_LOW) for a in alerts if a.level is Level.CRITICAL)
 
 
 def test_end_to_end_night_hypo_gives_critical():

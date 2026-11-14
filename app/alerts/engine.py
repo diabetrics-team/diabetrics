@@ -55,6 +55,14 @@ def _confirmed_readings(readings: Sequence[Reading]) -> list[Reading]:
     return confirmed
 
 
+def last_low_recovery(history: Sequence[Reading], now: datetime) -> datetime | None:
+    """Return the latest confirmed reading above the low episode reset threshold."""
+    readings = _history(history, now)
+    if not readings:
+        return None
+    return next((r.ts for r in reversed(_confirmed_readings(readings)) if r.mmol > config.LOW_RESET), None)
+
+
 def _sustained(history: Sequence[Reading], threshold: float) -> bool:
     latest = history[-1]
     if latest.mmol <= threshold:
@@ -120,7 +128,7 @@ def evaluate(
             level=severity,
             value=value,
             created_at=now,
-            needs_ack=severity is Level.CRITICAL,
+            needs_ack=severity is Level.CRITICAL and kind is not AlertKind.PREDICTED_LOW,
         )
 
     def deliverable(item: Alert) -> bool:

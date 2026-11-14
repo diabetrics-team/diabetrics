@@ -99,7 +99,7 @@ class OfficialScenarios(unittest.TestCase):
                         }
                         actual = evaluate(history, forecast, state, now, sent)
                         self.assertTrue(expected <= {a.kind for a in actual if a.level is Level.CRITICAL}, now)
-                        self.assertTrue(all(a.needs_ack for a in actual if a.level is Level.CRITICAL))
+                        self.assertTrue(all(a.needs_ack == (a.kind is not AlertKind.PREDICTED_LOW) for a in actual if a.level is Level.CRITICAL))
                         sent.extend(actual)
 
     def test_night_prediction_precedes_observed_very_low(self):

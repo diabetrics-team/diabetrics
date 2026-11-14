@@ -5,9 +5,12 @@ from collections.abc import Callable, Collection, Sequence
 from datetime import datetime, timedelta
 
 from app import clock
-from app.models import Action, ActionType, Alert, Level
+from app.models import Action, ActionType, Alert, AlertKind, Level
 
 from .config import REPEAT_AFTER, TRUSTED_AFTER_MINUTES
+
+
+LOW_ESCALATION_KINDS = frozenset({AlertKind.LOW, AlertKind.VERY_LOW, AlertKind.STILL_LOW})
 
 
 def escalation_step(
@@ -16,6 +19,8 @@ def escalation_step(
     *,
     repeated_alert_ids: Collection[int] = (),
     trusted_after_minutes: int = TRUSTED_AFTER_MINUTES,
+    low_recovered_at: datetime | None = None,
+    low_episode_escalated: bool = False,
 ) -> list[Action]:
     """Return due actions. The caller records successful delivery before the next tick.
 
@@ -28,14 +33,22 @@ def escalation_step(
         raise ValueError("Trusted-contact delay must be greater than the repeat delay")
 
     actions = []
-    for alert in open_alerts:
+    for alert in sorted(open_alerts, key=lambda item: item.created_at):
         if (
             alert.id is None or alert.level is not Level.CRITICAL or not alert.needs_ack
+            or alert.kind is AlertKind.PREDICTED_LOW
             or alert.acked_at is not None or alert.escalated_at is not None
         ):
             continue
+        is_low = alert.kind in LOW_ESCALATION_KINDS
+        if is_low and low_recovered_at is not None and alert.created_at <= low_recovered_at:
+            continue
         age = now - alert.created_at
         if age >= trusted_after:
+            if is_low and low_episode_escalated:
+                continue
+            if is_low:
+                low_episode_escalated = True
             actions.append(Action(
                 ActionType.NOTIFY_TRUSTED, alert,
                 {"minutes_without_ack": age // timedelta(minutes=1)},
