@@ -200,3 +200,25 @@ def test_alert_ids_are_not_reused_after_delete(mem):
     second = db.save_alert(Alert(Level.CRITICAL, AlertKind.VERY_LOW, NOW, 2.8, True, user_id=u.id))
     assert second.id > first.id
     assert db.trusted_delivery_state(second.id) == {}       # старая доставка не «прилипла»
+
+
+def test_switching_nightscout_forgets_old_source_data(mem):
+    """Другой адрес Nightscout — другой источник: старые показания и тревоги удаляются."""
+    u = _user()
+    db.save_readings(u.id, [Reading(NOW + timedelta(hours=20), 3.1)])       # «из будущего» (fake-NS)
+    old = db.save_alert(Alert(Level.CRITICAL, AlertKind.VERY_LOW, NOW, 2.8, True, user_id=u.id))
+    db.record_trusted_attempt(old.id, 555, NOW, delivered=False)
+    db.set_mode(u.id, ModeState(Mode.DND), NOW)
+    db.create_invite(u.id, "inv", NOW)
+    db.accept_invite("inv", 555, "Мама", NOW)
+
+    db.upsert_user(111, NOW, ns_url="http://ns", ns_token="new-token")      # тот же адрес — ничего не трогаем
+    assert db.last_reading_ts(u.id) is not None and db.open_alerts(u.id)
+
+    db.upsert_user(111, NOW, ns_url="https://real.example")                 # другой источник
+    assert db.last_reading_ts(u.id) is None
+    assert db.open_alerts(u.id) == [] and db.recent_alerts(u.id, NOW - timedelta(days=1)) == []
+    assert db.trusted_delivery_state(old.id) == {}
+    assert db.get_mode(u.id) == ModeState(Mode.DND)                         # режим и доверенные остаются
+    assert db.trusted_chat_ids(u.id) == [555]
+    assert db.get_user(u.id).ns_url == "https://real.example"
