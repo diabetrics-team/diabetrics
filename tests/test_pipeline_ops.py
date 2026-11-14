@@ -157,3 +157,29 @@ def test_still_low_fires_under_night_schedule(outbox):
             state["mode"] = ModeState(Mode.AFTER_HYPO, until=now + timedelta(minutes=15))
     still = [a for a in repo.alerts if a.kind is AlertKind.STILL_LOW]
     assert len(still) == 1 and still[0].level is Level.CRITICAL and still[0].needs_ack
+
+
+def test_failed_repeat_is_retried_next_tick(monkeypatch):
+    """Повтор критического упал с таймаутом → на следующем тике ещё попытка, а не «уже повторяли»."""
+    from datetime import UTC, datetime
+
+    from app.models import Alert
+
+    t0 = datetime(2026, 11, 14, 3, 0, tzinfo=UTC)
+    user = U(1, 111)
+    repo = Repo([user])
+    alert = repo.save_alert(Alert(Level.CRITICAL, AlertKind.VERY_LOW, t0, 2.8, True, user_id=1), sent_at=t0)
+    calls = []
+
+    async def flaky(a, chat_id):
+        calls.append(clock.now())
+        if len(calls) == 1:
+            raise TimeoutError("Telegram не ответил")
+        return 500
+
+    monkeypatch.setattr(pipeline, "notify", flaky)
+    for m in (5, 6, 7, 8):
+        clock.freeze(t0 + timedelta(minutes=m))
+        asyncio.run(pipeline._escalate(user, repo, clock.now()))
+    assert calls == [t0 + timedelta(minutes=5), t0 + timedelta(minutes=6)]   # сбой, успех, дальше тишина
+    assert repo.last_sent_at(alert.id) == t0 + timedelta(minutes=6)
