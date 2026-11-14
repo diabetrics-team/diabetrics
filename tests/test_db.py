@@ -186,3 +186,17 @@ def test_trusted_invite(mem):
     assert db.accept_invite("abc", 666, "Чужой", NOW) is None   # код одноразовый
     assert db.trusted_chat_ids(u.id) == [555]
     assert db.remove_trusted(u.id) == 1 and db.trusted_chat_ids(u.id) == []
+
+
+def test_alert_ids_are_not_reused_after_delete(mem):
+    """После очистки уведомлений (scripts/demo.sh) новые не получают старые id."""
+    from sqlalchemy import delete
+
+    u = _user()
+    first = db.save_alert(Alert(Level.CRITICAL, AlertKind.VERY_LOW, NOW, 2.8, True, user_id=u.id))
+    db.record_trusted_attempt(first.id, 555, NOW, delivered=True)
+    with db._session() as s, s.begin():
+        s.execute(delete(AlertRow))
+    second = db.save_alert(Alert(Level.CRITICAL, AlertKind.VERY_LOW, NOW, 2.8, True, user_id=u.id))
+    assert second.id > first.id
+    assert db.trusted_delivery_state(second.id) == {}       # старая доставка не «прилипла»

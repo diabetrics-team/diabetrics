@@ -106,7 +106,13 @@ class ReadingRow(Base):
 
 class AlertRow(Base):
     __tablename__ = "alerts"
-    __table_args__ = (Index("ix_alerts_user_created", "user_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_alerts_user_created", "user_id", "created_at"),
+        # id не переиспользуются после удаления строк. Иначе кнопка «Я в порядке» под старым
+        # сообщением или старая запись о доставке доверенному попали бы на новое уведомление
+        # с тем же id (так было после очистки базы между прогонами демо).
+        {"sqlite_autoincrement": True},
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
