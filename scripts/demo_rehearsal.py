@@ -287,22 +287,22 @@ async def _steps(demo: Demo, chats: dict[int, list[Bubble]], port: int, check, g
           "по расписанию" in demo.last(ANYA.id)[0].text, plain(demo.last(ANYA.id)[0].text))
 
     demo.step[0] = "alerts"
-    first_critical = trusted_alert = None
+    owner_critical = []
+    trusted_alert = None
     minute = 60 / speed                         # секунд реального времени в минуте сценария
     deadline = time.monotonic() + WAIT_FOR_TRUSTED_MIN * minute
     while time.monotonic() < deadline and trusted_alert is None:
         before = {c: len(v) for c, v in chats.items()}
         await pipeline.tick()
         demo.show_new(before)
-        bot_to_anya = [b for b in chats[ANYA.id] if b.sender == "bot" and b.text.startswith("🔴")]
-        if first_critical is None and bot_to_anya:
-            first_critical = bot_to_anya[0]
-            check("Ане пришло 🔴 критическое с кнопкой «Я в порядке»",
-                  any(c.startswith("ack:") for c in first_critical.callbacks))
+        owner_critical = [
+            b for b in chats[ANYA.id]
+            if b.sender == "bot" and b.text.startswith("🔴")
+            and any(c.startswith("ack:") for c in b.callbacks)
+        ]
         trusted_alert = next((b for b in chats.get(BORYA.id, []) if "не отвечает" in b.text), None)
         await asyncio.sleep(minute)             # опрос раз в минуту сценария, как POLL_SECONDS
-    repeats = [b for b in chats[ANYA.id] if b.sender == "bot" and b.text.startswith("🔴")]
-    check("через 5 мин сценария — повтор Ане", len(repeats) >= 2, f"критических: {len(repeats)}")
+    check("Ане пришло 🔴 критическое с кнопкой «Я в порядке»", bool(owner_critical))
     check("через 10 мин сценария — сообщение Боре", trusted_alert is not None,
           f"за {WAIT_FOR_TRUSTED_MIN} мин сценария не пришло")
     if trusted_alert is None:
@@ -310,7 +310,10 @@ async def _steps(demo: Demo, chats: dict[int, list[Bubble]], port: int, check, g
 
     demo.step[0] = "ack"
     ack = next(c for c in trusted_alert.callbacks if c.startswith("ack:"))
-    anya_same_alert = [b for b in chats[ANYA.id] if ack in b.callbacks]   # первое + повтор
+    anya_same_alert = [b for b in owner_critical if ack in b.callbacks]
+    check("через 5 мин сценария — повтор той же тревоги Ане", len(anya_same_alert) >= 2)
+    if not anya_same_alert:
+        return
     await demo.press(BORYA, ack)
     check("Боря нажал кнопку → Ане «Боря подтверждает», кнопки погасли",
           any("Боря подтверждает" in b.text for b in demo.last(ANYA.id, 3))

@@ -17,7 +17,7 @@ from enum import Enum, StrEnum
 
 
 class Level(StrEnum):
-    CRITICAL = "critical"     # 🔴 приходит всегда, требует «Я в порядке»
+    CRITICAL = "critical"     # 🔴 приходит во всех режимах. Подтверждение зависит от needs_ack
     IMPORTANT = "important"   # 🟠
     INFO = "info"             # 🔵
 

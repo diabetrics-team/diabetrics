@@ -7,8 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from app import clock, db, pipeline
-from app.models import Alert, AlertKind, Level, Reading
+pytest.importorskip("sqlalchemy")
+
+from app import clock, db, pipeline  # noqa: E402
+from app.models import Alert, AlertKind, Level, Reading  # noqa: E402
 
 
 @pytest.mark.parametrize(("scenario", "expected"), [
@@ -88,3 +90,29 @@ def test_new_episode_can_escalate_after_recovery_and_restart(tmp_path, monkeypat
     second = add(AlertKind.VERY_LOW, 30, 2.8)
     asyncio.run(pipeline._escalate(user, db, start + timedelta(minutes=40)))
     assert delivered == [first.id, second.id]
+
+
+def test_confirmed_low_can_escalate_again_if_glucose_falls_further(tmp_path, monkeypatch):
+    start = datetime(2026, 11, 14, 12, tzinfo=UTC)
+    db.configure(f"sqlite:///{tmp_path / 'confirmed-low.db'}")
+    user = db.upsert_user(111, start)
+    db.create_invite(user.id, "invite", start)
+    db.accept_invite("invite", 222, "Trusted", start)
+    delivered = []
+
+    async def notify(alert, chat, minutes):
+        delivered.append((alert.kind, chat))
+
+    monkeypatch.setattr(pipeline, "notify_trusted", notify)
+    db.save_readings(user.id, [Reading(start, 3.6)])
+    low = db.save_alert(Alert(Level.CRITICAL, AlertKind.LOW, start, 3.6, True, user_id=user.id))
+    asyncio.run(pipeline._escalate(user, db, start + timedelta(minutes=10)))
+    assert delivered == [(AlertKind.LOW, 222)]
+    assert db.mark_ack(low.id, 222, start + timedelta(minutes=11))
+
+    later = start + timedelta(minutes=35)
+    db.save_readings(user.id, [Reading(later, 2.7)])
+    db.save_alert(Alert(Level.CRITICAL, AlertKind.VERY_LOW, later, 2.7, True, user_id=user.id))
+    asyncio.run(pipeline._escalate(user, db, later + timedelta(minutes=10)))
+    asyncio.run(pipeline._escalate(user, db, later + timedelta(minutes=11)))
+    assert delivered == [(AlertKind.LOW, 222), (AlertKind.VERY_LOW, 222)]

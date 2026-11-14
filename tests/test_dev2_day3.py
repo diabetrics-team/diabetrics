@@ -81,6 +81,33 @@ class ModeTests(unittest.TestCase):
                 if alerts:
                     self.assertEqual(alerts[0].needs_ack, expected is Level.CRITICAL)
 
+    def test_night_suppresses_noncritical_alerts(self):
+        low_at = NOW - timedelta(minutes=5)
+        prior_low = Alert(Level.CRITICAL, AlertKind.LOW, low_at, 3.5, True)
+        cases = [
+            ([Reading(low_at, 3.5), Reading(NOW, 5.0)], None, [prior_low], AlertKind.BACK_IN_RANGE),
+            ([Reading(NOW, 6.0)], Forecast(2.9, 2.8, 0), [], AlertKind.PREDICTED_LOW),
+        ]
+        for history, forecast, recent, kind in cases:
+            with self.subTest(kind=kind):
+                normal = evaluate(history, forecast, ModeState(), NOW, recent)
+                self.assertEqual([alert.kind for alert in normal], [kind])
+                self.assertEqual(evaluate(history, forecast, ModeState(Mode.NIGHT), NOW, recent), [])
+
+    def test_night_notifies_of_sensor_loss_after_twenty_minutes(self):
+        readings, facts = load("sensor_lost")
+        mode = ModeState(Mode.NIGHT)
+        last = readings[-1].ts
+        self.assertEqual(evaluate(readings, None, mode, last + timedelta(minutes=19), []), [])
+        now = last + timedelta(minutes=20)
+        [alert] = evaluate(readings, None, mode, now, [])
+        self.assertIs(alert.kind, AlertKind.NO_DATA)
+        self.assertIs(alert.level, Level.IMPORTANT)
+        self.assertEqual(alert.created_at.astimezone(MSK).strftime("%H:%M"),
+                         facts["gaps"][0]["no_data_20min_at"])
+        self.assertFalse(alert.needs_ack)
+        self.assertEqual(evaluate(readings, None, ModeState(Mode.DND), now, []), [])
+
     def test_critical_alerts_are_visible_in_each_mode(self):
         for mode in Mode:
             with self.subTest(mode=mode):

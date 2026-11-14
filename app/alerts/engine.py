@@ -82,6 +82,8 @@ def _visible(alert: Alert, active_mode: Mode) -> bool:
         return True
     if active_mode is Mode.DND:
         return False
+    if active_mode is Mode.NIGHT:
+        return alert.kind is AlertKind.NO_DATA
     if active_mode is Mode.WORK:
         return alert.level is not Level.INFO
     if active_mode is Mode.AFTER_MEAL:
