@@ -81,11 +81,12 @@ async def notify_trusted(alert: Alert, trusted_chat_id: int, minutes_without_ack
     """Доверенному лицу: кто не отвечает, сахар, тренд, сколько минут нет ответа."""
     repo = _db()
     owner = repo.get_user(alert.user_id) if repo is not None and alert.user_id is not None else None
-    direction = None
+    direction = current = None
     if owner is not None:
         recent = repo.readings_since(owner.id, clock.now() - TREND_WINDOW)
-        direction = recent[-1].direction if recent else None
-    text = format_trusted_alert(alert, owner.name if owner else None, direction, minutes_without_ack)
+        if recent:
+            direction, current = recent[-1].direction, recent[-1].mmol
+    text = format_trusted_alert(alert, owner.name if owner else None, direction, minutes_without_ack, current)
     if _bot is None:
         _print(trusted_chat_id, text, alert.id is not None, prefix="notify_trusted")
         return None
